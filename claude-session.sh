@@ -1,9 +1,11 @@
 #!/bin/bash
 # Usage: claude-session "task name" [session-id]
+# Set CLAUDE_LAUNCHER=happy to use Happy Coder instead of claude
 # Creates/restores tmux session and registers it in VS Code Restore Terminals
 
 SESSION_NAME="$1"
 SESSION_ID="$2"
+LAUNCHER="${CLAUDE_LAUNCHER:-claude}"  # default: claude, set to "happy" for Happy Coder
 VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
 
 if [ -z "$SESSION_NAME" ]; then
@@ -26,7 +28,10 @@ if [ -n "$SESSION_ID" ] && [ "$SESSION_EXISTS" = "true" ]; then
 fi
 
 if [ "$SESSION_EXISTS" = "false" ]; then
-  if [ -n "$SESSION_ID" ]; then
+  if [ "$LAUNCHER" = "happy" ]; then
+    # Happy Coder: no --resume support, always use --continue equivalent
+    CLAUDE_CMD="happy"
+  elif [ -n "$SESSION_ID" ]; then
     CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
   else
     CLAUDE_CMD="claude --dangerously-skip-permissions --continue"
