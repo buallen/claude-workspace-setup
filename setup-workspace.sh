@@ -41,6 +41,9 @@ ok "Directory ready"
 
 # ── Step 3: Write loop.sh (L4 Stop Hook) ─────────────────────────────────────
 info "Writing ~/.claude/hooks/loop.sh..."
+if [ -f ~/.claude/hooks/loop.sh ]; then
+  ok "loop.sh already exists, skipping (delete it manually to reset)"
+else
 cat > ~/.claude/hooks/loop.sh << 'LOOP_EOF'
 #!/bin/bash
 # L4 Ralph Wiggum Loop - Stop Hook
@@ -82,9 +85,13 @@ printf '{"decision":"block","reason":"Pending tasks remain","systemMessage":%s}\
 LOOP_EOF
 chmod +x ~/.claude/hooks/loop.sh
 ok "loop.sh written"
+fi
 
 # ── Step 4: Write claude-session.sh ──────────────────────────────────────────
 info "Writing ~/.claude/claude-session.sh..."
+if [ -f ~/.claude/claude-session.sh ]; then
+  ok "claude-session.sh already exists, skipping (delete it manually to reset)"
+else
 cat > ~/.claude/claude-session.sh << 'SESSION_EOF'
 #!/bin/bash
 # Usage: claude-session "task name"
@@ -146,9 +153,13 @@ tmux attach -t "$SESSION_NAME"
 SESSION_EOF
 chmod +x ~/.claude/claude-session.sh
 ok "claude-session.sh written"
+fi
 
 # ── Step 5: Write end-session.sh ─────────────────────────────────────────────
 info "Writing ~/.claude/end-session.sh..."
+if [ -f ~/.claude/end-session.sh ]; then
+  ok "end-session.sh already exists, skipping (delete it manually to reset)"
+else
 cat > ~/.claude/end-session.sh << 'END_EOF'
 #!/bin/bash
 # Usage: end-session "task name"
@@ -193,6 +204,7 @@ echo "Removed from VS Code restore list: $SESSION_NAME"
 END_EOF
 chmod +x ~/.claude/end-session.sh
 ok "end-session.sh written"
+fi
 
 # ── Step 6: Configure tmux to forward session name as terminal title ─────────
 info "Configuring tmux title forwarding..."
@@ -235,23 +247,23 @@ if [ ! -f "$SETTINGS" ]; then
 fi
 
 python3 - "$SETTINGS" << 'PYTHON'
-import json, sys
+import json, sys, os
 
 settings_path = sys.argv[1]
 
-with open(settings_path, 'r') as f:
-    settings = json.load(f)
+try:
+    with open(settings_path, 'r') as f:
+        settings = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError) as e:
+    print(f"Error reading {settings_path}: {e}", file=sys.stderr)
+    sys.exit(1)
 
 hook_entry = {
     "type": "command",
-    "command": str(settings_path).replace("settings.json", "hooks/loop.sh"),
+    "command": os.path.expanduser("~/.claude/hooks/loop.sh"),
     "timeout": 10,
     "statusMessage": "Checking task list..."
 }
-
-# Fix the path to be absolute
-import os
-hook_entry["command"] = os.path.expanduser("~/.claude/hooks/loop.sh")
 
 hooks = settings.setdefault("hooks", {})
 stop_hooks = hooks.setdefault("Stop", [])
@@ -287,8 +299,12 @@ elif [ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
 fi
 
 if [ -n "$CODE_BIN" ]; then
-  "$CODE_BIN" --install-extension EthanSK.restore-terminals --force
-  ok "Extension installed: EthanSK.restore-terminals"
+  if "$CODE_BIN" --list-extensions 2>/dev/null | grep -qi 'EthanSK.restore-terminals'; then
+    ok "Extension already installed: EthanSK.restore-terminals"
+  else
+    "$CODE_BIN" --install-extension EthanSK.restore-terminals
+    ok "Extension installed: EthanSK.restore-terminals"
+  fi
 else
   echo ""
   echo "  VS Code CLI not found. To install manually:"
