@@ -63,4 +63,8 @@ with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2, ensure_ascii=False)
 PYTHON
 
-tmux attach -t "$SESSION_NAME"
+if [ -n "$TMUX" ]; then
+  tmux switch-client -t "$SESSION_NAME"
+else
+  tmux attach -t "$SESSION_NAME"
+fi
