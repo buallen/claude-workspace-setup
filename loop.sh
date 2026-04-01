@@ -6,13 +6,11 @@ TASKS_FILE="$PWD/tasks.md"
 MAX_ITERATIONS=100
 COUNTER_FILE="/tmp/claude_loop_$(pwd | shasum | cut -c1-8)"
 
-# No tasks.md -> allow exit
 if [ ! -f "$TASKS_FILE" ]; then
   rm -f "$COUNTER_FILE"
   exit 0
 fi
 
-# Find next pending task
 NEXT_TASK=$(grep -m1 "^- \[ \]" "$TASKS_FILE" 2>/dev/null)
 
 if [ -z "$NEXT_TASK" ]; then
@@ -21,7 +19,6 @@ if [ -z "$NEXT_TASK" ]; then
   exit 0
 fi
 
-# Read and increment counter
 count=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
 
 if [ "$count" -ge "$MAX_ITERATIONS" ]; then
@@ -33,12 +30,7 @@ fi
 count=$((count + 1))
 echo "$count" > "$COUNTER_FILE"
 
-# Extract task content
-TASK_CONTENT=$(echo "$NEXT_TASK" | sed 's/^- \[ \] //')
-
-# Escape for JSON
-TASK_JSON=$(printf '%s' "$TASK_CONTENT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-
+TASK_CONTENT=$(echo "$NEXT_TASK" | sed 's/^- \[ \] //; s/\r//')
 CONTEXT="[Loop $count/$MAX_ITERATIONS] Execute the next pending task from tasks.md:\n\n$TASK_CONTENT\n\nWhen done, mark it as [x] in tasks.md, then end this turn."
 CONTEXT_JSON=$(printf '%s' "$CONTEXT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
 

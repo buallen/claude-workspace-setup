@@ -27,7 +27,7 @@ fi
 
 if [ "$SESSION_EXISTS" = "false" ]; then
   if [ -n "$SESSION_ID" ]; then
-    CLAUDE_CMD="claude --dangerously-skip-permissions --resume $SESSION_ID"
+    CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
   else
     CLAUDE_CMD="claude --dangerously-skip-permissions --continue"
   fi
