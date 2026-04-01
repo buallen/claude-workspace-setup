@@ -116,6 +116,16 @@ This opens (or re-attaches to) a tmux session named "Task Name", starts Claude i
 
 **New sessions** start Claude fresh. **Existing sessions** re-attach and Claude resumes the last conversation automatically via `--continue`.
 
+### Resume a specific conversation
+
+If you have a Claude session ID and want to load it into a named tab:
+
+```bash
+claude-session "Task Name" <session-id>
+```
+
+This creates a new tmux session that runs `claude --resume <session-id>`, loading that specific conversation. Useful when you want to assign an existing conversation to a named workspace tab.
+
 ### End a session when done
 
 ```bash
