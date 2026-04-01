@@ -16,7 +16,7 @@ fi
 echo -ne "\033]0;${SESSION_NAME}\007"
 
 if ! tmux has-session -s "$SESSION_NAME" 2>/dev/null; then
-  tmux new-session -d -s "$SESSION_NAME" -c "$HOME/Documents/GitHub" "claude --dangerously-skip-permissions"
+  tmux new-session -d -s "$SESSION_NAME" -c "$HOME/Documents/GitHub" "claude --dangerously-skip-permissions --continue"
   echo "New session: $SESSION_NAME"
 else
   echo "Restored session: $SESSION_NAME"
