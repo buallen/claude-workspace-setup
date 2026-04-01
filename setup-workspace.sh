@@ -216,6 +216,8 @@ else
 # Forward session name as terminal title (for VS Code tab display)
 set-option -g set-titles on
 set-option -g set-titles-string "#S"
+# Start login shell so ~/.zshrc aliases are available in tmux sessions
+set-option -g default-command "${SHELL} -l"
 TMUX_EOF
   ok "tmux title forwarding configured"
 fi
