@@ -1,10 +1,10 @@
 # Claude Code Persistent Workspace Setup
 
-Keep your Claude Code sessions alive across VS Code crashes, and restore all named terminal tabs automatically on restart.
+Keep your Claude Code sessions alive across VS Code crashes, and restore all named terminal tabs automatically on restart — with conversations resuming exactly where they left off.
 
 ## The Problem
 
-When VS Code crashes, all terminal tabs and Claude Code processes die. You lose your tab names and have to restart everything manually.
+When VS Code crashes, all terminal tabs and Claude Code processes die. You lose your tab names, your Claude conversations, and have to restart everything manually.
 
 ## The Solution
 
@@ -17,6 +17,7 @@ Every time you run `claude-session "My Task"`, it:
 1. Creates a named tmux session running Claude
 2. Sets the VS Code terminal tab title
 3. Auto-registers itself in VS Code settings so it restores on restart
+4. On re-attach, resumes your last Claude conversation automatically (`--continue`)
 
 ## One-Click Setup
 
@@ -48,7 +49,7 @@ tmux -V
 ```bash
 mkdir -p ~/.claude/hooks
 
-cp loop.sh          ~/.claude/hooks/loop.sh
+cp loop.sh           ~/.claude/hooks/loop.sh
 cp claude-session.sh ~/.claude/claude-session.sh
 cp end-session.sh    ~/.claude/end-session.sh
 
@@ -113,6 +114,8 @@ claude-session "Task Name"
 
 This opens (or re-attaches to) a tmux session named "Task Name", starts Claude inside it, and registers the tab so VS Code restores it on restart.
 
+**New sessions** start Claude fresh. **Existing sessions** re-attach and Claude resumes the last conversation automatically via `--continue`.
+
 ### End a session when done
 
 ```bash
@@ -133,18 +136,18 @@ tmux list-sessions
 claude-session "Task Name"
 ```
 
-Same command — if the session already exists, it just re-attaches.
+Same command — if the session already exists, it just re-attaches and Claude picks up right where it left off.
 
 ## After a VS Code Crash
 
-VS Code will automatically re-open all registered terminal tabs on startup. Each tab runs `claude-session "Task Name"` which re-attaches to the still-running tmux session. Your Claude conversations continue exactly where they left off.
+VS Code will automatically re-open all registered terminal tabs on startup. Each tab runs `claude-session "Task Name"` which re-attaches to the still-running tmux session. Your Claude conversations continue **exactly where they left off** — no context lost, no re-explaining the task.
 
 ## What's Included
 
 | File | Purpose |
 |------|---------|
 | `setup-workspace.sh` | One-click setup script |
-| `claude-session.sh` | Start/restore a named Claude session |
+| `claude-session.sh` | Start/restore a named Claude session (auto-resumes conversation) |
 | `end-session.sh` | Kill a session and clean up VS Code settings |
 | `loop.sh` | L4 Stop Hook — drives task list automation |
 
