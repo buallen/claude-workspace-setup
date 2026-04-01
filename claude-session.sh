@@ -55,8 +55,12 @@ if not already_registered:
         ]
     })
     settings["restoreTerminals.terminals"] = terminals
-    with open(settings_path, 'w') as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
+
+# Ensure VS Code uses escape sequence for tab titles
+settings["terminal.integrated.tabs.title"] = "${sequence}"
+
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=2, ensure_ascii=False)
 PYTHON
 
 tmux attach -t "$SESSION_NAME"
