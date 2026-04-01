@@ -40,11 +40,12 @@ else
   echo "Restored session: $SESSION_NAME"
 fi
 
-python3 - "$SESSION_NAME" "$VSCODE_SETTINGS" << 'PYTHON'
+python3 - "$SESSION_NAME" "${SESSION_ID}" "$VSCODE_SETTINGS" << 'PYTHON'
 import json, sys, os, tempfile
 
 session_name = sys.argv[1]
-settings_path = sys.argv[2]
+session_id   = sys.argv[2]  # may be empty string
+settings_path = sys.argv[3]
 
 try:
     with open(settings_path, 'r') as f:
@@ -54,22 +55,31 @@ except (json.JSONDecodeError, FileNotFoundError):
 
 terminals = settings.get("restoreTerminals.terminals", [])
 
-already_registered = any(
-    st.get("name") == session_name
-    for t in terminals
-    for st in t.get("splitTerminals", [])
-)
+safe_name = session_name.replace("'", "'\\''")
+restore_cmd = f"claude-session '{safe_name}' '{session_id}'" if session_id else f"claude-session '{safe_name}'"
+
+# Find existing entry for this session name
+existing_entry = None
+for t in terminals:
+    for st in t.get("splitTerminals", []):
+        if st.get("name") == session_name:
+            existing_entry = st
+            break
 
 changed = False
 
-if not already_registered:
-    safe_name = session_name.replace("'", "'\\''")
+if existing_entry is None:
+    # Not registered yet — add it
     terminals.append({
         "splitTerminals": [
-            {"name": session_name, "commands": [f"claude-session '{safe_name}'"]}
+            {"name": session_name, "commands": [restore_cmd]}
         ]
     })
     settings["restoreTerminals.terminals"] = terminals
+    changed = True
+elif existing_entry.get("commands", [""]) [0] != restore_cmd:
+    # Already registered but restore command changed (e.g. new session ID)
+    existing_entry["commands"] = [restore_cmd]
     changed = True
 
 if settings.get("terminal.integrated.tabs.title") != "${sequence}":
