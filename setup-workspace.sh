@@ -194,7 +194,24 @@ END_EOF
 chmod +x ~/.claude/end-session.sh
 ok "end-session.sh written"
 
-# ── Step 6: Add shell aliases ─────────────────────────────────────────────────
+# ── Step 6: Configure tmux to forward session name as terminal title ─────────
+info "Configuring tmux title forwarding..."
+TMUX_CONF="$HOME/.tmux.conf"
+if grep -q 'set-titles' "$TMUX_CONF" 2>/dev/null; then
+  ok "tmux title config already present"
+else
+  cat >> "$TMUX_CONF" << 'TMUX_EOF'
+# Forward session name as terminal title (for VS Code tab display)
+set-option -g set-titles on
+set-option -g set-titles-string "#S"
+TMUX_EOF
+  ok "tmux title forwarding configured"
+fi
+if tmux list-sessions &>/dev/null; then
+  tmux source "$TMUX_CONF" 2>/dev/null && ok "tmux config reloaded" || true
+fi
+
+# ── Step 7: Add shell aliases ────────────────────────────────────────────────
 info "Adding shell aliases to ~/.zshrc..."
 ALIAS_BLOCK='
 # Claude Code Workspace aliases
@@ -209,7 +226,7 @@ else
   ok "Aliases added to ~/.zshrc"
 fi
 
-# ── Step 7: Update ~/.claude/settings.json with Stop Hook ────────────────────
+# ── Step 8: Update ~/.claude/settings.json with Stop Hook ────────────────────
 info "Configuring L4 Stop Hook in ~/.claude/settings.json..."
 SETTINGS="$HOME/.claude/settings.json"
 
@@ -259,7 +276,7 @@ else:
 PYTHON
 ok "Stop Hook configured"
 
-# ── Step 8: Install VS Code extension ────────────────────────────────────────
+# ── Step 9: Install VS Code extension ────────────────────────────────────────
 info "Installing VS Code 'Restore Terminals' extension..."
 # Try PATH first, then the standard macOS app bundle location
 CODE_BIN=""
