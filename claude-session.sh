@@ -16,9 +16,18 @@ fi
 
 echo -ne "\033]0;${SESSION_NAME}\007"
 
-if ! tmux has-session -s "$SESSION_NAME" 2>/dev/null; then
+SESSION_EXISTS=false
+tmux has-session -s "$SESSION_NAME" 2>/dev/null && SESSION_EXISTS=true
+
+if [ -n "$SESSION_ID" ] && [ "$SESSION_EXISTS" = "true" ]; then
+  tmux kill-session -t "$SESSION_NAME"
+  SESSION_EXISTS=false
+  echo "Killed existing session to load session ID: $SESSION_ID"
+fi
+
+if [ "$SESSION_EXISTS" = "false" ]; then
   if [ -n "$SESSION_ID" ]; then
-    CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
+    CLAUDE_CMD="claude --dangerously-skip-permissions --resume $SESSION_ID"
   else
     CLAUDE_CMD="claude --dangerously-skip-permissions --continue"
   fi
