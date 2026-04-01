@@ -216,6 +216,8 @@ else
 # Forward session name as terminal title (for VS Code tab display)
 set-option -g set-titles on
 set-option -g set-titles-string "#S"
+# Enable mouse scrolling through pane history
+set -g mouse on
 TMUX_EOF
   ok "tmux title forwarding configured"
 fi
