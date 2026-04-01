@@ -261,17 +261,24 @@ ok "Stop Hook configured"
 
 # ── Step 8: Install VS Code extension ────────────────────────────────────────
 info "Installing VS Code 'Restore Terminals' extension..."
+# Try PATH first, then the standard macOS app bundle location
+CODE_BIN=""
 if command -v code &>/dev/null; then
-  code --install-extension EthanSK.restore-terminals --force
+  CODE_BIN="code"
+elif [ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" ]; then
+  CODE_BIN="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+fi
+
+if [ -n "$CODE_BIN" ]; then
+  "$CODE_BIN" --install-extension EthanSK.restore-terminals --force
   ok "Extension installed: EthanSK.restore-terminals"
 else
   echo ""
-  echo "  VS Code CLI ('code') not found in PATH."
-  echo "  To install manually:"
-  echo "  1. Open VS Code"
-  echo "  2. Press Cmd+Shift+X"
-  echo "  3. Search: Restore Terminals"
-  echo "  4. Install by EthanSK"
+  echo "  VS Code CLI not found. To install manually:"
+  echo "  1. Open VS Code → Cmd+Shift+X"
+  echo "  2. Search: Restore Terminals"
+  echo "  3. Install by EthanSK"
+  echo "  Or add 'code' to PATH via VS Code: Cmd+Shift+P → 'Shell Command: Install code in PATH'"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
