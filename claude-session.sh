@@ -28,9 +28,10 @@ if [ -n "$SESSION_ID" ] && [ "$SESSION_EXISTS" = "true" ]; then
 fi
 
 if [ "$SESSION_EXISTS" = "false" ]; then
-  if [ "$LAUNCHER" = "happy" ]; then
-    # Happy Coder: no --resume support, always use --continue equivalent
-    CLAUDE_CMD="happy"
+  if [ "$LAUNCHER" = "happy" ] && [ -n "$SESSION_ID" ]; then
+    CLAUDE_CMD="happy --yolo --resume '$SESSION_ID'"
+  elif [ "$LAUNCHER" = "happy" ]; then
+    CLAUDE_CMD="happy --yolo --continue"
   elif [ -n "$SESSION_ID" ]; then
     CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
   else
