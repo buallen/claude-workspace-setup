@@ -206,6 +206,16 @@ chmod +x ~/.claude/end-session.sh
 ok "end-session.sh written"
 fi
 
+# ── Step 5b: Write sync-session-id.sh (Stop Hook) ────────────────────────────
+info "Writing ~/.claude/hooks/sync-session-id.sh..."
+if [ -f ~/.claude/hooks/sync-session-id.sh ]; then
+  ok "sync-session-id.sh already exists, skipping (delete it manually to reset)"
+else
+  cp "$(dirname "$0")/sync-session-id.sh" ~/.claude/hooks/sync-session-id.sh
+  chmod +x ~/.claude/hooks/sync-session-id.sh
+  ok "sync-session-id.sh written"
+fi
+
 # ── Step 6: Configure tmux to forward session name as terminal title ─────────
 info "Configuring tmux title forwarding..."
 TMUX_CONF="$HOME/.tmux.conf"
@@ -277,10 +287,27 @@ already_configured = any(
     for h in group.get("hooks", [])
 )
 
+sync_entry = {
+    "type": "command",
+    "command": os.path.expanduser("~/.claude/hooks/sync-session-id.sh"),
+    "timeout": 5,
+    "statusMessage": "Syncing session ID..."
+}
+already_sync = any(
+    h.get("command") == sync_entry["command"]
+    for group in stop_hooks
+    for h in group.get("hooks", [])
+)
+
 if not already_configured:
     stop_hooks.append({
         "matcher": "",
         "hooks": [hook_entry]
+    })
+if not already_sync:
+    stop_hooks.append({
+        "matcher": "",
+        "hooks": [sync_entry]
     })
     with open(settings_path, 'w') as f:
         json.dump(settings, f, indent=2, ensure_ascii=False)
