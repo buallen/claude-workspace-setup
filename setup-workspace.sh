@@ -75,6 +75,8 @@ set-option -g set-titles on
 set-option -g set-titles-string "#S"
 # Start login shell so ~/.zshrc aliases are available in tmux sessions
 set-option -g default-command "${SHELL} -l"
+# Enable mouse scrolling
+set -g mouse on
 TMUX_EOF
   ok "tmux title forwarding configured"
 fi
