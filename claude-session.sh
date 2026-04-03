@@ -27,6 +27,17 @@ if [ "$SESSION_EXISTS" = "false" ]; then
   SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
   mkdir -p "$SESSION_DIR"
 
+  # If a session ID is provided, ensure the conversation file exists in the
+  # session's project dir so --resume can find it (Claude indexes by CWD).
+  if [ -n "$SESSION_ID" ]; then
+    SESSION_PROJECT_DIR="$HOME/.claude/projects/-Users-kan-lu-claude-sessions-${SESSION_NAME}"
+    GITHUB_PROJECT_DIR="$HOME/.claude/projects/-Users-kan-lu-Documents-GitHub"
+    mkdir -p "$SESSION_PROJECT_DIR"
+    if [ ! -f "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl" ] && [ -f "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" ]; then
+      cp "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl"
+    fi
+  fi
+
   if [ "$LAUNCHER" = "happy" ] && [ -n "$SESSION_ID" ]; then
     CLAUDE_CMD="happy --yolo --resume '$SESSION_ID'"
   elif [ "$LAUNCHER" = "happy" ]; then
