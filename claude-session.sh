@@ -21,20 +21,12 @@ echo -ne "\033]0;${SESSION_NAME}\007"
 SESSION_EXISTS=false
 tmux has-session -t "$SESSION_NAME" 2>/dev/null && SESSION_EXISTS=true
 
-# Only kill if session exists but was started with a DIFFERENT session ID
-# (detect via the restore command that would have been used)
-if [ -n "$SESSION_ID" ] && [ "$SESSION_EXISTS" = "true" ]; then
-  RUNNING_CMD=$(tmux display-message -t "$SESSION_NAME" -p '#{pane_start_command}' 2>/dev/null || true)
-  if echo "$RUNNING_CMD" | grep -qF "$SESSION_ID"; then
-    echo "Attached session: $SESSION_NAME (session ID unchanged)"
-  else
-    tmux kill-session -t "$SESSION_NAME"
-    SESSION_EXISTS=false
-    echo "Killed existing session to load new session ID: $SESSION_ID"
-  fi
-fi
-
 if [ "$SESSION_EXISTS" = "false" ]; then
+  # Create real directory ~/claude-sessions/<SESSION_NAME> so Happy shows
+  # the session name (not "GitHub"). --yolo bypasses permissions so --add-dir not needed.
+  SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
+  mkdir -p "$SESSION_DIR"
+
   if [ "$LAUNCHER" = "happy" ] && [ -n "$SESSION_ID" ]; then
     CLAUDE_CMD="happy --yolo --resume '$SESSION_ID'"
   elif [ "$LAUNCHER" = "happy" ]; then
@@ -43,14 +35,6 @@ if [ "$SESSION_EXISTS" = "false" ]; then
     CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
   else
     CLAUDE_CMD="claude --dangerously-skip-permissions --continue"
-  fi
-
-  # Create a symlink ~/claude-sessions/<SESSION_NAME> -> ~/Documents/GitHub
-  # so Happy shows the session name instead of "GitHub"
-  SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
-  mkdir -p "$HOME/claude-sessions"
-  if [ ! -e "$SESSION_DIR" ]; then
-    ln -s "$HOME/Documents/GitHub" "$SESSION_DIR"
   fi
 
   if ! tmux new-session -d -s "$SESSION_NAME" -c "$SESSION_DIR" "$CLAUDE_CMD"; then
