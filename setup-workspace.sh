@@ -13,6 +13,8 @@ ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 info() { echo -e "${YELLOW}[..] $1${NC}"; }
 err()  { echo -e "${RED}[!!] $1${NC}"; }
 
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 echo ""
 echo "====================================="
 echo " Claude Code Persistent Workspace"
@@ -39,184 +41,29 @@ info "Creating ~/.claude/hooks/ directory..."
 mkdir -p ~/.claude/hooks
 ok "Directory ready"
 
-# ── Step 3: Write loop.sh (L4 Stop Hook) ─────────────────────────────────────
+# ── Step 3: Write claude-session.sh ──────────────────────────────────────────
+info "Writing ~/.claude/claude-session.sh..."
+cp "$REPO_DIR/claude-session.sh" ~/.claude/claude-session.sh
+chmod +x ~/.claude/claude-session.sh
+ok "claude-session.sh installed"
+
+# ── Step 4: Write loop.sh (L4 Stop Hook) ─────────────────────────────────────
 info "Writing ~/.claude/hooks/loop.sh..."
 if [ -f ~/.claude/hooks/loop.sh ]; then
-  ok "loop.sh already exists, skipping (delete it manually to reset)"
+  ok "loop.sh already exists, skipping"
 else
-cat > ~/.claude/hooks/loop.sh << 'LOOP_EOF'
-#!/bin/bash
-# L4 Ralph Wiggum Loop - Stop Hook
-# Checks tasks.md in current directory; blocks exit if pending tasks remain
-
-TASKS_FILE="$PWD/tasks.md"
-MAX_ITERATIONS=100
-COUNTER_FILE="/tmp/claude_loop_$(pwd | shasum | cut -c1-8)"
-
-if [ ! -f "$TASKS_FILE" ]; then
-  rm -f "$COUNTER_FILE"
-  exit 0
-fi
-
-NEXT_TASK=$(grep -m1 "^- \[ \]" "$TASKS_FILE" 2>/dev/null)
-
-if [ -z "$NEXT_TASK" ]; then
-  rm -f "$COUNTER_FILE"
-  printf '{"systemMessage": "All tasks completed! Loop ended."}\n'
-  exit 0
-fi
-
-count=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-
-if [ "$count" -ge "$MAX_ITERATIONS" ]; then
-  rm -f "$COUNTER_FILE"
-  printf '{"systemMessage": "Max iterations (%d) reached. Loop stopped."}\n' "$MAX_ITERATIONS"
-  exit 0
-fi
-
-count=$((count + 1))
-echo "$count" > "$COUNTER_FILE"
-
-TASK_CONTENT=$(echo "$NEXT_TASK" | sed 's/^- \[ \] //')
-CONTEXT="[Loop $count/$MAX_ITERATIONS] Execute the next pending task from tasks.md:\n\n$TASK_CONTENT\n\nWhen done, mark it as [x] in tasks.md, then end this turn."
-CONTEXT_JSON=$(printf '%s' "$CONTEXT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-
-printf '{"decision":"block","reason":"Pending tasks remain","systemMessage":%s}\n' "$CONTEXT_JSON"
-LOOP_EOF
-chmod +x ~/.claude/hooks/loop.sh
-ok "loop.sh written"
-fi
-
-# ── Step 4: Write claude-session.sh ──────────────────────────────────────────
-info "Writing ~/.claude/claude-session.sh..."
-if [ -f ~/.claude/claude-session.sh ]; then
-  ok "claude-session.sh already exists, skipping (delete it manually to reset)"
-else
-cat > ~/.claude/claude-session.sh << 'SESSION_EOF'
-#!/bin/bash
-# Usage: claude-session "task name"
-# Creates/restores tmux session and registers it in VS Code Restore Terminals
-
-SESSION_NAME="$1"
-VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
-
-if [ -z "$SESSION_NAME" ]; then
-  echo "Usage: claude-session <task-name>"
-  echo ""
-  echo "Running sessions:"
-  tmux list-sessions 2>/dev/null | awk -F: '{print "  " $1}' || echo "  (none)"
-  exit 1
-fi
-
-echo -ne "\033]0;${SESSION_NAME}\007"
-
-if ! tmux has-session -s "$SESSION_NAME" 2>/dev/null; then
-  tmux new-session -d -s "$SESSION_NAME" -c "$HOME/Documents/GitHub"
-  tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions" Enter
-  echo "New session: $SESSION_NAME"
-else
-  echo "Restored session: $SESSION_NAME"
-fi
-
-python3 - "$SESSION_NAME" "$VSCODE_SETTINGS" << 'PYTHON'
-import json, sys
-
-session_name = sys.argv[1]
-settings_path = sys.argv[2]
-
-try:
-    with open(settings_path, 'r') as f:
-        settings = json.load(f)
-except:
-    settings = {}
-
-terminals = settings.get("restoreTerminals.terminals", [])
-
-already_registered = any(
-    st.get("name") == session_name
-    for t in terminals
-    for st in t.get("splitTerminals", [])
-)
-
-if not already_registered:
-    terminals.append({
-        "splitTerminals": [
-            {"name": session_name, "commands": [f"claude-session '{session_name}'"]}
-        ]
-    })
-    settings["restoreTerminals.terminals"] = terminals
-    with open(settings_path, 'w') as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-PYTHON
-
-tmux attach -t "$SESSION_NAME"
-SESSION_EOF
-chmod +x ~/.claude/claude-session.sh
-ok "claude-session.sh written"
+  cp "$REPO_DIR/loop.sh" ~/.claude/hooks/loop.sh
+  chmod +x ~/.claude/hooks/loop.sh
+  ok "loop.sh written"
 fi
 
 # ── Step 5: Write end-session.sh ─────────────────────────────────────────────
 info "Writing ~/.claude/end-session.sh..."
-if [ -f ~/.claude/end-session.sh ]; then
-  ok "end-session.sh already exists, skipping (delete it manually to reset)"
-else
-cat > ~/.claude/end-session.sh << 'END_EOF'
-#!/bin/bash
-# Usage: end-session "task name"
-# Kills tmux session and removes it from VS Code Restore Terminals
-
-SESSION_NAME="$1"
-VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
-
-if [ -z "$SESSION_NAME" ]; then
-  echo "Usage: end-session <task-name>"
-  echo ""
-  echo "Running sessions:"
-  tmux list-sessions 2>/dev/null | awk -F: '{print "  " $1}' || echo "  (none)"
-  exit 1
-fi
-
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null && echo "Killed session: $SESSION_NAME"
-
-python3 - "$SESSION_NAME" "$VSCODE_SETTINGS" << 'PYTHON'
-import json, sys
-
-session_name = sys.argv[1]
-settings_path = sys.argv[2]
-
-try:
-    with open(settings_path, 'r') as f:
-        settings = json.load(f)
-except:
-    sys.exit(0)
-
-terminals = settings.get("restoreTerminals.terminals", [])
-settings["restoreTerminals.terminals"] = [
-    t for t in terminals
-    if not any(st.get("name") == session_name for st in t.get("splitTerminals", []))
-]
-
-with open(settings_path, 'w') as f:
-    json.dump(settings, f, indent=2, ensure_ascii=False)
-PYTHON
-
-echo "Removed from VS Code restore list: $SESSION_NAME"
-END_EOF
+cp "$REPO_DIR/end-session.sh" ~/.claude/end-session.sh
 chmod +x ~/.claude/end-session.sh
-ok "end-session.sh written"
-fi
+ok "end-session.sh installed"
 
-# ── Step 5b: Write sync-session-id.sh (Stop Hook) ────────────────────────────
-info "Writing ~/.claude/hooks/sync-session-id.sh..."
-if [ -f ~/.claude/hooks/sync-session-id.sh ]; then
-  ok "sync-session-id.sh already exists, skipping (delete it manually to reset)"
-else
-  cp "$(dirname "$0")/sync-session-id.sh" ~/.claude/hooks/sync-session-id.sh
-  chmod +x ~/.claude/hooks/sync-session-id.sh
-  ok "sync-session-id.sh written"
-fi
-
-# ── Step 6: Configure tmux to forward session name as terminal title ─────────
+# ── Step 6: Configure tmux ───────────────────────────────────────────────────
 info "Configuring tmux title forwarding..."
 TMUX_CONF="$HOME/.tmux.conf"
 if grep -q 'set-titles' "$TMUX_CONF" 2>/dev/null; then
@@ -237,89 +84,66 @@ fi
 
 # ── Step 7: Add shell aliases ────────────────────────────────────────────────
 info "Adding shell aliases to ~/.zshrc..."
-ALIAS_BLOCK='
-# Claude Code Workspace aliases
-alias claude-session="~/.claude/claude-session.sh"
-alias end-session="~/.claude/end-session.sh"
-'
-
-if grep -q 'alias claude-session' ~/.zshrc 2>/dev/null; then
+if grep -q 'alias claude-session\|alias happy-session' ~/.zshrc 2>/dev/null; then
   ok "Aliases already present in ~/.zshrc"
 else
-  echo "$ALIAS_BLOCK" >> ~/.zshrc
+  cat >> ~/.zshrc << 'ALIAS_EOF'
+
+# Claude Code Workspace aliases
+alias claude-session="~/.claude/claude-session.sh"
+alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh"
+alias end-session="~/.claude/end-session.sh"
+ALIAS_EOF
   ok "Aliases added to ~/.zshrc"
 fi
 
-# ── Step 8: Update ~/.claude/settings.json with Stop Hook ────────────────────
-info "Configuring L4 Stop Hook in ~/.claude/settings.json..."
-SETTINGS="$HOME/.claude/settings.json"
+# ── Step 8: Configure VS Code ────────────────────────────────────────────────
+info "Configuring VS Code settings..."
+VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
+mkdir -p "$(dirname "$VSCODE_SETTINGS")"
 
-if [ ! -f "$SETTINGS" ]; then
-  echo '{}' > "$SETTINGS"
-fi
-
-python3 - "$SETTINGS" << 'PYTHON'
-import json, sys, os
+python3 - "$VSCODE_SETTINGS" << 'PYTHON'
+import json, sys, os, tempfile
 
 settings_path = sys.argv[1]
 
 try:
-    with open(settings_path, 'r') as f:
+    with open(settings_path) as f:
         settings = json.load(f)
-except (json.JSONDecodeError, FileNotFoundError) as e:
-    print(f"Error reading {settings_path}: {e}", file=sys.stderr)
-    sys.exit(1)
+except (FileNotFoundError, json.JSONDecodeError):
+    settings = {}
 
-hook_entry = {
-    "type": "command",
-    "command": os.path.expanduser("~/.claude/hooks/loop.sh"),
-    "timeout": 10,
-    "statusMessage": "Checking task list..."
-}
+changed = False
 
-hooks = settings.setdefault("hooks", {})
-stop_hooks = hooks.setdefault("Stop", [])
+# Terminal tab title shows sequence (session name set by escape code)
+if settings.get("terminal.integrated.tabs.title") != "${sequence}":
+    settings["terminal.integrated.tabs.title"] = "${sequence}"
+    changed = True
 
-# Check if already configured
-already_configured = any(
-    h.get("command") == hook_entry["command"]
-    for group in stop_hooks
-    for h in group.get("hooks", [])
-)
+# Happy Session terminal profile for one-click new sessions
+profiles = settings.get("terminal.integrated.profiles.osx", {})
+if "Happy Session" not in profiles:
+    profiles["Happy Session"] = {
+        "path": "zsh",
+        "args": ["-ic", "printf '\\nSession name: '; read -r name; [[ -z \"$name\" ]] && name=\"session-$(date +%H%M%S)\"; CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh \"$name\"; exec zsh -i"]
+    }
+    settings["terminal.integrated.profiles.osx"] = profiles
+    changed = True
 
-sync_entry = {
-    "type": "command",
-    "command": os.path.expanduser("~/.claude/hooks/sync-session-id.sh"),
-    "timeout": 5,
-    "statusMessage": "Syncing session ID..."
-}
-already_sync = any(
-    h.get("command") == sync_entry["command"]
-    for group in stop_hooks
-    for h in group.get("hooks", [])
-)
-
-if not already_configured:
-    stop_hooks.append({
-        "matcher": "",
-        "hooks": [hook_entry]
-    })
-if not already_sync:
-    stop_hooks.append({
-        "matcher": "",
-        "hooks": [sync_entry]
-    })
-    with open(settings_path, 'w') as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-    print("Hook added.")
+if changed:
+    dir_ = os.path.dirname(settings_path)
+    with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
+        json.dump(settings, tf, indent=2, ensure_ascii=False)
+        tmp_path = tf.name
+    os.replace(tmp_path, settings_path)
+    print("  VS Code settings updated")
 else:
-    print("Hook already configured.")
+    print("  VS Code settings already configured")
 PYTHON
-ok "Stop Hook configured"
+ok "VS Code configured"
 
-# ── Step 9: Install VS Code extension ────────────────────────────────────────
+# ── Step 9: Install VS Code extensions ───────────────────────────────────────
 info "Installing VS Code 'Restore Terminals' extension..."
-# Try PATH first, then the standard macOS app bundle location
 CODE_BIN=""
 if command -v code &>/dev/null; then
   CODE_BIN="code"
@@ -335,13 +159,50 @@ if [ -n "$CODE_BIN" ]; then
     ok "Extension installed: EthanSK.restore-terminals"
   fi
 else
-  echo ""
-  echo "  VS Code CLI not found. To install manually:"
-  echo "  1. Open VS Code → Cmd+Shift+X"
-  echo "  2. Search: Restore Terminals"
-  echo "  3. Install by EthanSK"
-  echo "  Or add 'code' to PATH via VS Code: Cmd+Shift+P → 'Shell Command: Install code in PATH'"
+  echo "  VS Code CLI not found — install manually:"
+  echo "  Cmd+Shift+P → 'Shell Command: Install code in PATH', then rerun this script"
 fi
+
+# ── Step 10: Configure L4 Stop Hook ──────────────────────────────────────────
+info "Configuring L4 Stop Hook in ~/.claude/settings.json..."
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+[ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
+
+python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
+import json, sys, os, tempfile
+
+settings_path = sys.argv[1]
+try:
+    with open(settings_path) as f:
+        settings = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    settings = {}
+
+hook_cmd = os.path.expanduser("~/.claude/hooks/loop.sh")
+hooks = settings.setdefault("hooks", {})
+stop_hooks = hooks.setdefault("Stop", [])
+
+already = any(
+    h.get("command") == hook_cmd
+    for group in stop_hooks
+    for h in group.get("hooks", [])
+)
+
+if not already:
+    stop_hooks.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": hook_cmd, "timeout": 10, "statusMessage": "Checking task list..."}]
+    })
+    dir_ = os.path.dirname(settings_path)
+    with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
+        json.dump(settings, tf, indent=2, ensure_ascii=False)
+        tmp_path = tf.name
+    os.replace(tmp_path, settings_path)
+    print("  Stop Hook added")
+else:
+    print("  Stop Hook already configured")
+PYTHON
+ok "Stop Hook configured"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
@@ -349,10 +210,11 @@ echo "====================================="
 ok "Setup complete!"
 echo "====================================="
 echo ""
-echo "Reload your shell:  source ~/.zshrc"
+echo "Reload your shell:    source ~/.zshrc"
 echo ""
-echo "Start a session:    claude-session \"My Task\""
-echo "End a session:      end-session \"My Task\""
+echo "New happy session:    happy-session 'My Task'"
+echo "New claude session:   claude-session 'My Task'"
+echo "End a session:        end-session 'My Task'"
 echo ""
-echo "VS Code will auto-restore all sessions on restart."
+echo "Or in VS Code: click '+' dropdown → 'Happy Session'"
 echo ""
