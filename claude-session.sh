@@ -35,7 +35,7 @@ if [ "$SESSION_EXISTS" = "false" ]; then
     GITHUB_PROJECT_DIR="$HOME/.claude/projects/-Users-kan-lu-Documents-GitHub"
     mkdir -p "$SESSION_PROJECT_DIR"
     if [ ! -f "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl" ] && [ -f "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" ]; then
-      cp "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl"
+      ln "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl"
     fi
   fi
 
