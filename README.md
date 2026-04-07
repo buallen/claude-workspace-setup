@@ -1,130 +1,71 @@
 # Claude Code Persistent Workspace Setup
 
-Keep your Claude Code sessions alive across VS Code crashes, and restore all named terminal tabs automatically on restart — with conversations resuming exactly where they left off.
+Keep your Claude/Happy sessions alive across VS Code crashes, and restore all named terminal tabs automatically on restart — with conversations resuming exactly where they left off.
 
 ## The Problem
 
-When VS Code crashes, all terminal tabs and Claude Code processes die. You lose your tab names, your Claude conversations, and have to restart everything manually.
+When VS Code crashes, all terminal tabs and Claude/Happy processes die. You lose your tab names, your conversations, and have to restart everything manually.
 
 ## The Solution
 
-Two components working together:
+Three components working together:
 
-- **tmux** — keeps Claude processes alive even when VS Code closes
+- **tmux** — keeps Claude/Happy processes alive even when VS Code closes
+- **Happy Coder** — syncs sessions to the cloud and your mobile device
 - **Restore Terminals** (VS Code extension) — remembers tab names and restores them on startup
 
-Every time you run `claude-session "My Task"`, it:
-1. Creates a named tmux session running Claude
-2. Sets the VS Code terminal tab title
-3. Auto-registers itself in VS Code settings so it restores on restart
-4. On re-attach, resumes your last Claude conversation automatically (`--continue`)
+Every `happy-session "My Task"`:
+1. Creates a symlink `~/claude-sessions/My Task` → `~/Documents/GitHub` (so Happy shows the right tab name)
+2. Creates a named tmux session running `happy --yolo` (always with full permissions)
+3. Sets the VS Code terminal tab title to "My Task"
+4. Auto-registers itself so VS Code restores the tab on restart
+5. On re-attach, resumes your last conversation automatically
 
 ## One-Click Setup
 
 ```bash
+git clone https://github.com/buallen/claude-workspace-setup.git
+cd claude-workspace-setup
 bash setup-workspace.sh
 source ~/.zshrc
 ```
 
-That's it. The script handles everything:
+The script handles everything:
 - Installs tmux (via Homebrew if not present)
-- Writes all scripts to `~/.claude/`
+- Installs all scripts to `~/.claude/`
 - Adds shell aliases to `~/.zshrc`
+- Configures VS Code: tab titles + **Happy Session** terminal profile
 - Configures the L4 Loop Stop Hook in `~/.claude/settings.json`
-- Installs the VS Code **Restore Terminals** extension (`EthanSK.restore-terminals`)
-
-## Manual Setup
-
-If you prefer to understand each step:
-
-### Step 1: Install tmux
-
-```bash
-brew install tmux
-tmux -V
-```
-
-### Step 2: Copy scripts
-
-```bash
-mkdir -p ~/.claude/hooks
-
-cp loop.sh           ~/.claude/hooks/loop.sh
-cp claude-session.sh ~/.claude/claude-session.sh
-cp end-session.sh    ~/.claude/end-session.sh
-
-chmod +x ~/.claude/hooks/loop.sh
-chmod +x ~/.claude/claude-session.sh
-chmod +x ~/.claude/end-session.sh
-```
-
-### Step 3: Add shell aliases
-
-Add to `~/.zshrc`:
-
-```bash
-alias claude-session="~/.claude/claude-session.sh"
-alias end-session="~/.claude/end-session.sh"
-```
-
-Then:
-```bash
-source ~/.zshrc
-```
-
-### Step 4: Configure the L4 Stop Hook
-
-Add to `~/.claude/settings.json` under `"hooks"`:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/Users/YOUR_USERNAME/.claude/hooks/loop.sh",
-            "timeout": 10,
-            "statusMessage": "Checking task list..."
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Step 5: Install VS Code extension
-
-```bash
-code --install-extension EthanSK.restore-terminals
-```
-
-Or manually: VS Code → Extensions → search **Restore Terminals** by EthanSK → Install.
+- Installs the VS Code **Restore Terminals** extension
 
 ## Daily Usage
 
-### Start a new Claude session
+### Start a new Happy session (recommended)
 
 ```bash
-claude-session "Task Name"
+happy-session "Task Name"
 ```
 
-This opens (or re-attaches to) a tmux session named "Task Name", starts Claude inside it, and registers the tab so VS Code restores it on restart.
+Or in VS Code: click the **+** dropdown → **Happy Session** (prompts for a name).
 
-**New sessions** start Claude fresh. **Existing sessions** re-attach and Claude resumes the last conversation automatically via `--continue`.
+This creates a symlink, starts `happy --yolo --continue` in a tmux session, and registers the tab in VS Code.
 
 ### Resume a specific conversation
 
-If you have a Claude session ID and want to load it into a named tab:
-
 ```bash
-claude-session "Task Name" <session-id>
+happy-session "Task Name" <conversation-id>
 ```
 
-This creates a new tmux session that runs `claude --resume <session-id>`, loading that specific conversation. Useful when you want to assign an existing conversation to a named workspace tab.
+Loads a specific conversation ID into a named tab. The conversation file is automatically copied so `--resume` can find it.
+
+### Use plain Claude instead of Happy
+
+```bash
+claude-session "Task Name"
+claude-session "Task Name" <conversation-id>
+```
+
+Same flow but runs `claude --dangerously-skip-permissions` instead of Happy.
 
 ### End a session when done
 
@@ -140,42 +81,54 @@ Kills the tmux session and removes it from the VS Code restore list.
 tmux list-sessions
 ```
 
-### Re-attach to a detached session
-
-```bash
-claude-session "Task Name"
-```
-
-Same command — if the session already exists, it just re-attaches and Claude picks up right where it left off.
-
 ## After a VS Code Crash
 
-VS Code will automatically re-open all registered terminal tabs on startup. Each tab runs `claude-session "Task Name"` which re-attaches to the still-running tmux session. Your Claude conversations continue **exactly where they left off** — no context lost, no re-explaining the task.
+VS Code automatically re-opens all registered terminal tabs. Each tab runs `happy-session "Task Name"` which re-attaches to the still-running tmux session. Conversations continue exactly where they left off — no context lost.
+
+## VS Code Terminal Profile
+
+After setup, clicking **+** → **Happy Session** in VS Code terminal opens a prompt:
+
+```
+Session name: █
+```
+
+Type a name and press Enter. A new Happy session starts immediately, named and cloud-synced.
 
 ## What's Included
 
 | File | Purpose |
 |------|---------|
 | `setup-workspace.sh` | One-click setup script |
-| `claude-session.sh` | Start/restore a named Claude session (auto-resumes conversation) |
+| `claude-session.sh` | Start/restore a named Claude or Happy session |
 | `end-session.sh` | Kill a session and clean up VS Code settings |
 | `loop.sh` | L4 Stop Hook — drives task list automation |
 
-## L4 Loop (Bonus: Automated Task Execution)
+## Session Architecture
+
+```
+VS Code tab "Features"
+  └─ tmux session "Features"
+       └─ happy --yolo --resume <conv-id>   ← cloud-synced, mobile-accessible
+            └─ ~/claude-sessions/Features   ← symlink → ~/Documents/GitHub
+```
+
+## L4 Loop (Automated Task Execution)
 
 `loop.sh` is a Claude Code Stop Hook that enables batch task execution. Create a `tasks.md` in your project:
 
 ```markdown
 - [ ] Write unit tests for auth module
-- [ ] Update API documentation
+- [ ] Update API documentation  
 - [ ] Fix null pointer bug in payment service
 ```
 
-Claude will automatically execute each task one by one, mark it `[x]` when done, and move to the next — up to 100 iterations.
+Claude executes each task one by one, marks it `[x]` when done, and moves to the next — up to 100 iterations automatically.
 
 ## Requirements
 
 - macOS
 - [Homebrew](https://brew.sh)
 - [Claude Code CLI](https://claude.ai/code)
+- [Happy Coder](https://happycoder.app) (for cloud sync and mobile access)
 - VS Code
