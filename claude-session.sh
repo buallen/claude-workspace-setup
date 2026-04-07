@@ -22,12 +22,10 @@ SESSION_EXISTS=false
 tmux has-session -t "$SESSION_NAME" 2>/dev/null && SESSION_EXISTS=true
 
 if [ "$SESSION_EXISTS" = "false" ]; then
-  # Create symlink ~/claude-sessions/<SESSION_NAME> → ~/Documents/GitHub
-  # so Happy shows the session name as the tab label.
+  # Create real directory ~/claude-sessions/<SESSION_NAME> so Happy shows
+  # the session name as the tab label (symlinks get resolved by Node.js).
   SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
-  if [ ! -e "$SESSION_DIR" ]; then
-    ln -s "$HOME/Documents/GitHub" "$SESSION_DIR"
-  fi
+  mkdir -p "$SESSION_DIR"
 
   # If a session ID is provided, ensure the conversation file exists in the
   # session's project dir so --resume can find it (Claude indexes by CWD).
