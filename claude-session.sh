@@ -103,6 +103,11 @@ else
   echo "Restored session: $SESSION_NAME"
 fi
 
+# Tell VS Code the CWD is the session directory (shows "GitHub" in tab subtitle
+# since ~/claude-sessions/<name> is a real dir, not under workspace root)
+SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
+printf '\e]7;file://%s%s\a' "$(hostname)" "$SESSION_DIR"
+
 if [ -n "$TMUX" ]; then
   tmux switch-client -t "$SESSION_NAME"
 else
