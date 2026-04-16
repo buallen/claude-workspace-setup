@@ -56,7 +56,7 @@ This creates a symlink, starts `happy --yolo --continue` in a tmux session, and 
 happy-session "Task Name" <conversation-id>
 ```
 
-Loads a specific conversation ID into a named tab. The conversation file is automatically copied so `--resume` can find it.
+Loads a specific conversation ID into a named tab. The script searches all Claude project directories for the session file and links it where `--resume` can find it. If the session file doesn't exist anywhere, it warns and falls back to `--continue` so the session always starts rather than silently exiting.
 
 ### Use plain Claude instead of Happy
 

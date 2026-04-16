@@ -30,21 +30,30 @@ if [ "$SESSION_EXISTS" = "false" ]; then
 
   # If a session ID is provided, ensure the conversation file exists in the
   # session's project dir so --resume can find it (Claude indexes by CWD).
+  RESOLVED_SESSION_ID=""
   if [ -n "$SESSION_ID" ]; then
     SESSION_PROJECT_DIR="$HOME/.claude/projects/-Users-kan-lu-claude-sessions-${SESSION_NAME}"
-    GITHUB_PROJECT_DIR="$HOME/.claude/projects/-Users-kan-lu-Documents-GitHub"
     mkdir -p "$SESSION_PROJECT_DIR"
-    if [ ! -f "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl" ] && [ -f "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" ]; then
-      ln "$GITHUB_PROJECT_DIR/${SESSION_ID}.jsonl" "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl"
+    if [ -f "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl" ]; then
+      RESOLVED_SESSION_ID="$SESSION_ID"
+    else
+      # Search all project dirs for the session file and link it
+      FOUND=$(find "$HOME/.claude/projects" -name "${SESSION_ID}.jsonl" -not -path "*/subagents/*" 2>/dev/null | head -1)
+      if [ -n "$FOUND" ]; then
+        ln "$FOUND" "$SESSION_PROJECT_DIR/${SESSION_ID}.jsonl" 2>/dev/null || true
+        RESOLVED_SESSION_ID="$SESSION_ID"
+      else
+        echo "Warning: session file for '$SESSION_ID' not found — starting fresh session" >&2
+      fi
     fi
   fi
 
-  if [ "$LAUNCHER" = "happy" ] && [ -n "$SESSION_ID" ]; then
-    CLAUDE_CMD="happy --yolo --resume '$SESSION_ID'"
+  if [ "$LAUNCHER" = "happy" ] && [ -n "$RESOLVED_SESSION_ID" ]; then
+    CLAUDE_CMD="happy --yolo --resume '$RESOLVED_SESSION_ID'"
   elif [ "$LAUNCHER" = "happy" ]; then
     CLAUDE_CMD="happy --yolo --continue"
-  elif [ -n "$SESSION_ID" ]; then
-    CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$SESSION_ID'"
+  elif [ -n "$RESOLVED_SESSION_ID" ]; then
+    CLAUDE_CMD="claude --dangerously-skip-permissions --resume '$RESOLVED_SESSION_ID'"
   else
     CLAUDE_CMD="claude --dangerously-skip-permissions --continue"
   fi
@@ -55,7 +64,7 @@ if [ "$SESSION_EXISTS" = "false" ]; then
   fi
   echo "New session: $SESSION_NAME"
 
-  python3 - "$SESSION_NAME" "${SESSION_ID}" "$VSCODE_SETTINGS" "$LAUNCHER" << 'PYTHON'
+  python3 - "$SESSION_NAME" "${RESOLVED_SESSION_ID}" "$VSCODE_SETTINGS" "$LAUNCHER" << 'PYTHON'
 import json, sys, os, tempfile
 
 session_name = sys.argv[1]
