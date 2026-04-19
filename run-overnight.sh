@@ -1,7 +1,11 @@
 #!/bin/bash
 # run-overnight.sh — Ralph loop for claude-workspace-setup
 # 今晚只跑 Phase 1（T01-T08）
-# Usage: caffeinate -i ./run-overnight.sh
+#
+# 启动方式：
+#   1. happy-session "Distiller"        ← 创建独立 session（VS Code 集成 + 云同步）
+#   2. cd ~/Documents/GitHub/claude-workspace-setup
+#   3. caffeinate -i ./run-overnight.sh ← 防止 Mac 睡眠，盖子开着跑
 
 set -e
 
