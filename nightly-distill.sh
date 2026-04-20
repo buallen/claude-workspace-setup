@@ -162,6 +162,11 @@ description: {description}
 print(f"__SUMMARY__:{json.dumps({'new': new_skills, 'updated': updated_skills})}")
 PYTHON
 
+# T11: 更新 registry
+echo ""
+echo "📋 更新 skill registry..."
+python3 "$SCRIPT_DIR/registry-init.py"
+
 # T06: 生成蒸馏报告
 echo ""
 echo "📝 生成报告..."
