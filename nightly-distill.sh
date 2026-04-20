@@ -52,13 +52,29 @@ for s in d['sessions']:
 print('\n\n'.join(parts))
 ")
 
-PROMPT=$(cat "$PROMPT_TEMPLATE" \
-  | sed "s|{EXISTING_SKILLS}|$EXISTING_SKILLS|g")
-FULL_PROMPT="$PROMPT
+# 用 Python 做模板替换，通过临时文件传递数据
+TMPDATA=$(mktemp)
+echo "$DATA" > "$TMPDATA"
+FULL_PROMPT=$(python3 - "$TMPDATA" "$PROMPT_TEMPLATE" << 'PYTEMPLATE'
+import sys, json
 
-## Conversations to analyze
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+with open(sys.argv[2]) as f:
+    template = f.read()
 
-$CONVERSATIONS"
+skills_list = "\n".join(
+    f"- {s['name']}: {s['description']}" for s in data['existing_skills']
+)
+conversations = "\n\n".join(
+    f"### Session: {s['project']} ({s['message_count']} messages)\n{s['text']}"
+    for s in data['sessions']
+)
+print(template.replace("{EXISTING_SKILLS}", skills_list)
+              .replace("{CONVERSATIONS}", conversations))
+PYTEMPLATE
+)
+rm -f "$TMPDATA"
 
 # T04: 调用 Claude 提取 skill
 CANDIDATES=$(echo "$FULL_PROMPT" | claude --print --no-markdown 2>/dev/null \
