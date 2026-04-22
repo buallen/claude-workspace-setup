@@ -33,7 +33,7 @@ CATEGORY_RULES = {
 }
 
 
-def detect_category(cwd: str, content_sample: str) -> str | None:
+def detect_category(cwd, content_sample):
     """从 cwd 路径和对话内容推断 category，不匹配返回 None"""
     cwd_lower = cwd.lower()
     content_lower = content_sample.lower()

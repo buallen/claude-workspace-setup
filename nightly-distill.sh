@@ -1,6 +1,6 @@
 #!/bin/bash
 # nightly-distill.sh — 夜间蒸馏器
-# 读取今日对话 → 提取 skill 候选 → 写入 ~/.claude/commands/
+# 读取今日对话 → 提取 playbook → 追加到 ~/.claude/commands/{data,troubleshoot,infra}.md
 # Usage: bash nightly-distill.sh
 
 set -e
@@ -17,76 +17,75 @@ echo "  夜间蒸馏器"
 echo "  $(date '+%Y-%m-%d %H:%M')"
 echo "========================================"
 
-# T02+T03: 读取今日会话 + 现有 skills
+# 读取今日会话
 echo ""
 echo "📖 读取今日对话..."
 DATA=$(python3 "$SCRIPT_DIR/distill-read.py" 2>/tmp/distill-stderr.log)
 cat /tmp/distill-stderr.log
 
 SESSION_COUNT=$(echo "$DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['sessions']))")
-SKILL_COUNT=$(echo "$DATA" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['existing_skills']))")
 
 if [ "$SESSION_COUNT" -eq 0 ]; then
   echo "今天没有对话记录，跳过蒸馏。"
   exit 0
 fi
 
-echo "找到 $SESSION_COUNT 个会话，$SKILL_COUNT 个现有 skill"
+echo "找到 $SESSION_COUNT 个会话"
 
-# T04: 构建蒸馏 prompt
+# 读取现有 playbook（从 data/troubleshoot/infra.md 的 AUTO-PLAYBOOKS 区块解析）
+EXISTING_PLAYBOOKS=$(python3 - "$COMMANDS_DIR" << 'PY'
+import sys, os, re
+commands_dir = sys.argv[1]
+out = []
+for cat in ("data", "troubleshoot", "infra"):
+    p = os.path.join(commands_dir, f"{cat}.md")
+    if not os.path.exists(p):
+        continue
+    text = open(p).read()
+    m = re.search(r'<!-- BEGIN AUTO-PLAYBOOKS -->(.*?)<!-- END AUTO-PLAYBOOKS -->', text, re.DOTALL)
+    if not m:
+        continue
+    for entry in re.findall(r'^### ([a-z0-9-]+)\s*\n\*\*When:\*\*\s*(.+?)(?=\n\n)', m.group(1), re.DOTALL | re.MULTILINE):
+        slug, when = entry
+        out.append(f"- [{cat}] {slug}: {when.strip()[:120]}")
+print("\n".join(out) if out else "(none)")
+PY
+)
+
+# 构建 prompt
 echo ""
-echo "🧠 分析对话，提取 skill 候选..."
-EXISTING_SKILLS=$(echo "$DATA" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-skills = d['existing_skills']
-print('\n'.join(f\"- {s['name']}: {s['description']}\" for s in skills))
-")
-
-CONVERSATIONS=$(echo "$DATA" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-parts = []
-for s in d['sessions']:
-    parts.append(f\"### Session: {s['project']} ({s['message_count']} messages)\n{s['text']}\")
-print('\n\n'.join(parts))
-")
-
-# 用 Python 做模板替换，通过临时文件传递数据
+echo "🧠 分析对话，提取 playbook 候选..."
 TMPDATA=$(mktemp)
 echo "$DATA" > "$TMPDATA"
-FULL_PROMPT=$(python3 - "$TMPDATA" "$PROMPT_TEMPLATE" << 'PYTEMPLATE'
+TMPEXIST=$(mktemp)
+printf '%s\n' "$EXISTING_PLAYBOOKS" > "$TMPEXIST"
+FULL_PROMPT=$(python3 - "$TMPDATA" "$PROMPT_TEMPLATE" "$TMPEXIST" << 'PYTEMPLATE'
 import sys, json
-
 with open(sys.argv[1]) as f:
     data = json.load(f)
 with open(sys.argv[2]) as f:
     template = f.read()
-
-skills_list = "\n".join(
-    f"- {s['name']}: {s['description']}" for s in data['existing_skills']
-)
+with open(sys.argv[3]) as f:
+    existing = f.read().strip()
 conversations = "\n\n".join(
-    f"### Session: {s['project']} ({s['message_count']} messages)\n{s['text']}"
+    f"### Session: {s['project']} (category={s['category']}, {s['message_count']} messages)\n{s['text']}"
     for s in data['sessions']
 )
-print(template.replace("{EXISTING_SKILLS}", skills_list)
+print(template.replace("{EXISTING_PLAYBOOKS}", existing)
               .replace("{CONVERSATIONS}", conversations))
 PYTEMPLATE
 )
-rm -f "$TMPDATA"
+rm -f "$TMPDATA" "$TMPEXIST"
 
-# T04: 调用 Claude 提取 skill
-CANDIDATES=$(echo "$FULL_PROMPT" | claude --print --no-markdown 2>/dev/null \
+# 调用 Claude 提取 playbook
+CANDIDATES=$(echo "$FULL_PROMPT" | claude --print 2>/tmp/distill-claude.err \
   | python3 -c "
 import sys, json, re
 text = sys.stdin.read()
-# 提取 JSON array
 match = re.search(r'\[.*\]', text, re.DOTALL)
 if match:
     try:
-        candidates = json.loads(match.group())
-        print(json.dumps(candidates))
+        print(json.dumps(json.loads(match.group())))
     except:
         print('[]')
 else:
@@ -94,98 +93,125 @@ else:
 ")
 
 CANDIDATE_COUNT=$(echo "$CANDIDATES" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
-echo "提取到 $CANDIDATE_COUNT 个 skill 候选"
+echo "提取到 $CANDIDATE_COUNT 个 playbook 候选"
 
 if [ "$CANDIDATE_COUNT" -eq 0 ]; then
-  echo "今日没有值得提取的新 skill。"
-  echo "# 蒸馏报告 $(date '+%Y-%m-%d')" > "$REPORT_FILE"
-  echo "今日没有提取到新 skill。" >> "$REPORT_FILE"
-  exit 0
+  echo "今日没有值得提取的新 playbook（维护步骤仍会跑）。"
 fi
 
-# T05: 写入 skill 文件
+# 追加 playbook 到对应 category 文件
+if [ "$CANDIDATE_COUNT" -gt 0 ]; then
 echo ""
-echo "✍️  写入 skill 文件..."
-NEW_SKILLS=()
-UPDATED_SKILLS=()
-
-echo "$CANDIDATES" | python3 - "$COMMANDS_DIR" << 'PYTHON'
-import sys, json, os
+echo "✍️  追加 playbook 到 category 文件..."
+TMPCAND=$(mktemp)
+echo "$CANDIDATES" > "$TMPCAND"
+python3 - "$COMMANDS_DIR" "$TMPCAND" << 'PYTHON'
+import sys, json, os, re
 
 commands_dir = sys.argv[1]
-candidates = json.load(sys.stdin)
-new_skills = []
-updated_skills = []
+with open(sys.argv[2]) as f:
+    candidates = json.load(f)
 
-for c in candidates:
-    name = c.get("name", "").strip()
-    if not name:
-        continue
+VALID = {"data", "troubleshoot", "infra"}
+BEGIN = "<!-- BEGIN AUTO-PLAYBOOKS -->"
+END = "<!-- END AUTO-PLAYBOOKS -->"
 
-    description = c.get("description", "")
-    triggers = c.get("triggers", [])
-    steps = c.get("steps", [])
-    delegates_to = c.get("delegates_to", [])
-    example = c.get("example_usage", "")
-
-    content = f"""---
-description: {description}
----
-
-# {name.replace('-', ' ').title()}
-
-## When to use
-{chr(10).join(f'- {t}' for t in triggers)}
-
-## Steps
-
-{chr(10).join(f'{i+1}. {s}' for i, s in enumerate(steps))}
-"""
-    if delegates_to:
-        content += f"\n## Related skills\n{chr(10).join(f'- /{s}' for s in delegates_to)}\n"
+def render_playbook(pb):
+    when = "; ".join(pb.get("when", []))
+    steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(pb.get("steps", [])))
+    example = pb.get("example", "").strip()
+    out = f"### {pb['slug']}\n**When:** {when}\n\n**Steps:**\n{steps}\n"
     if example:
-        content += f"\n## Example\n{example}\n"
+        out += f"\n**Example:** {example}\n"
+    return out
 
-    filepath = os.path.join(commands_dir, f"{name}.md")
-    exists = os.path.exists(filepath)
+def parse_existing(block_text):
+    # returns dict slug -> rendered entry text
+    entries = {}
+    # split on '### '
+    parts = re.split(r'\n(?=### )', block_text.strip())
+    for p in parts:
+        p = p.strip()
+        if not p.startswith("### "):
+            continue
+        m = re.match(r'### ([a-z0-9-]+)', p)
+        if m:
+            entries[m.group(1)] = p
+    return entries
 
-    with open(filepath, 'w') as f:
-        f.write(content)
+# Group candidates by category
+by_cat = {}
+for c in candidates:
+    cat = c.get("category", "").strip()
+    slug = c.get("slug", "").strip()
+    if cat not in VALID or not slug:
+        continue
+    by_cat.setdefault(cat, []).append(c)
 
-    if exists:
-        updated_skills.append(name)
-        print(f"  更新: {name}")
-    else:
-        new_skills.append(name)
-        print(f"  新增: {name}")
+new_entries = []
+updated_entries = []
 
-print(f"__SUMMARY__:{json.dumps({'new': new_skills, 'updated': updated_skills})}")
+for cat, pbs in by_cat.items():
+    path = os.path.join(commands_dir, f"{cat}.md")
+    if not os.path.exists(path):
+        print(f"  跳过 {cat}: {path} 不存在")
+        continue
+    text = open(path).read()
+    m = re.search(re.escape(BEGIN) + r'(.*?)' + re.escape(END), text, re.DOTALL)
+    if not m:
+        print(f"  跳过 {cat}: 没找到 AUTO-PLAYBOOKS 标记")
+        continue
+    existing = parse_existing(m.group(1))
+
+    for pb in pbs:
+        slug = pb["slug"]
+        rendered = render_playbook(pb)
+        if slug in existing:
+            existing[slug] = rendered
+            updated_entries.append(f"{cat}/{slug}")
+            print(f"  更新: {cat}/{slug}")
+        else:
+            existing[slug] = rendered
+            new_entries.append(f"{cat}/{slug}")
+            print(f"  新增: {cat}/{slug}")
+
+    # rebuild block in alphabetical order by slug for stability
+    new_block = "\n\n".join(existing[k] for k in sorted(existing.keys()))
+    new_text = text[:m.start(1)] + "\n" + new_block + "\n" + text[m.end(1):]
+    with open(path, "w") as f:
+        f.write(new_text)
+
+print(f"__SUMMARY__:{json.dumps({'new': new_entries, 'updated': updated_entries})}")
 PYTHON
+rm -f "$TMPCAND"
+fi  # end if CANDIDATE_COUNT > 0
 
-# T11: 更新 registry
+# 梳理 playbook: 去重/合并/删除过窄条目
+echo ""
+python3 "$SCRIPT_DIR/distill-maintain.py"
+
+# 更新 registry
 echo ""
 echo "📋 更新 skill registry..."
 python3 "$SCRIPT_DIR/registry-init.py"
 
-# T06: 生成蒸馏报告
+# 生成蒸馏报告
 echo ""
 echo "📝 生成报告..."
 cat > "$REPORT_FILE" << REPORT
-# 蒸馏报告 $(date '+%Y-%m-%d')
+# 蒸馏报告 $(date +%Y-%m-%d)
 
 ## 概况
 - 分析会话数: $SESSION_COUNT
-- 现有 skill 数: $SKILL_COUNT
 - 提取候选数: $CANDIDATE_COUNT
 
-## 新增/更新的 Skills
+## 追加的 Playbooks
 
 $(echo "$CANDIDATES" | python3 -c "
 import sys, json
 for c in json.load(sys.stdin):
-    print(f\"### /{c['name']}\")
-    print(f\"{c['description']}\")
-    print(f\"触发词: {', '.join(c.get('triggers', []))}\")
+    print(f\"### /{c.get('category','?')} → {c.get('slug','?')}\")
+    print(f\"触发词: {'; '.join(c.get('when', []))}\")
     print()
 ")
 
