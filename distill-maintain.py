@@ -3,8 +3,10 @@
 Skill maintenance — 读取每个 category 的 AUTO-PLAYBOOKS 区块,
 让 Claude 去重/合并/删除过窄条目,写回。
 """
-import os, re, json, subprocess, sys
+import os, re, json, subprocess, sys, logging
 from datetime import date
+
+log = logging.getLogger(__name__)
 
 COMMANDS_DIR = os.path.expanduser("~/.claude/commands")
 BACKUP_DIR = os.path.expanduser(f"~/claude-sessions/playbook-backups/{date.today().isoformat()}")
@@ -74,23 +76,38 @@ def call_claude(prompt, timeout=300):
 
 def validate(cleaned, original):
     if not isinstance(cleaned, list):
+        log.warning("validate: expected list, got %s: %r", type(cleaned).__name__, cleaned)
         return "not a list"
     if len(cleaned) == 0:
+        log.warning("validate: Claude returned empty list (original had %d entries)", len(original))
         return "empty output"
     if len(cleaned) < max(1, len(original) // 2):
+        log.warning(
+            "validate: too aggressive — original=%d, cleaned=%d (threshold=%d); first dropped slugs: %s",
+            len(original),
+            len(cleaned),
+            max(1, len(original) // 2),
+            [p.get("slug") for p in original if p.get("slug") not in {c.get("slug") for c in cleaned}][:5],
+        )
         return f"too aggressive ({len(original)}→{len(cleaned)}), rejecting"
-    for pb in cleaned:
+    for i, pb in enumerate(cleaned):
         if not isinstance(pb, dict):
+            log.warning("validate: entry[%d] is not dict: %r", i, pb)
             return "entry is not dict"
         for k in ("slug", "when", "steps"):
             if k not in pb:
+                log.warning("validate: entry[%d] missing required key %r; keys present: %s", i, k, list(pb.keys()))
                 return f"missing {k}"
         if not isinstance(pb["when"], list) or not pb["when"]:
+            log.warning("validate: entry[%d] slug=%r has invalid 'when': %r", i, pb.get("slug"), pb["when"])
             return f"bad when in {pb.get('slug')}"
         if not isinstance(pb["steps"], list) or not pb["steps"]:
+            log.warning("validate: entry[%d] slug=%r has invalid 'steps': %r", i, pb.get("slug"), pb["steps"])
             return f"bad steps in {pb.get('slug')}"
         if not re.match(r'^[a-z0-9-]+$', str(pb["slug"])):
+            log.warning("validate: entry[%d] slug %r fails kebab-case pattern", i, pb.get("slug"))
             return f"bad slug {pb.get('slug')}"
+    log.debug("validate: passed — %d entries", len(cleaned))
     return None
 
 
@@ -131,11 +148,14 @@ Rules:
 
     cleaned, err = call_claude(prompt)
     if err:
+        log.error("maintain(%s): claude call failed — %s", cat, err)
         return False, len(playbooks), len(playbooks), f"claude error: {err}"
     v = validate(cleaned, playbooks)
     if v:
+        log.warning("maintain(%s): validate rejected output — %s", cat, v)
         return False, len(playbooks), len(cleaned) if isinstance(cleaned, list) else 0, f"rejected: {v}"
 
+    log.info("maintain(%s): validate passed — %d→%d entries, writing back", cat, len(playbooks), len(cleaned))
     new_block = render(cleaned)
     new_text = text[:start] + new_block + text[end:]
     with open(path, "w") as f:
