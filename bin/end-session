@@ -1,0 +1,23 @@
+#!/bin/bash
+# Usage: end-session "task name"
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+[ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
+source "$REPO_DIR/lib/session.sh"
+
+SESSION_NAME="${1:-}"
+VSCODE_SETTINGS="${VSCODE_SETTINGS:-$HOME/Library/Application Support/Code/User/settings.json}"
+
+if [ -z "$SESSION_NAME" ]; then
+  echo "Usage: end-session <task-name>"
+  echo ""
+  echo "Running sessions:"
+  print_running_sessions
+  exit 1
+fi
+
+tmux kill-session -t "$SESSION_NAME" 2>/dev/null && echo "Killed session: $SESSION_NAME" || echo "No running session: $SESSION_NAME"
+python3 "$REPO_DIR/lib/vscode_restore.py" remove "$VSCODE_SETTINGS" "$SESSION_NAME"

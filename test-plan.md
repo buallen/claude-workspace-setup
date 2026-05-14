@@ -5,21 +5,21 @@
 - [ ] C-H1: setup-workspace.sh — 无 Homebrew 时报错退出 (mock: PATH中临时移除brew，测试 exit 1 和错误信息)
 - [ ] C-H3: setup-workspace.sh — ~/.claude/hooks/ 目录无写权限 (chmod 444 ~/.claude/hooks, 验证报错信息)
 - [ ] C-H4: setup-workspace.sh — ~/.claude/settings.json 损坏 (写入 `{invalid` 后重跑，验证 try/except 捕获并给出友好报错)
-- [ ] C-H6: claude-session.sh — settings.json 损坏时 session 仍能创建 (写入 `{bad}` 到 vscode settings，运行脚本，验证 tmux session 存在)
-- [ ] C-H8: claude-session.sh — tmux new-session 失败时 exit 1 (mock: tmux 不在PATH，验证错误输出和退出码)
-- [ ] C-H13: loop.sh — /tmp 无写权限模拟 (chmod 555 /tmp/claude_loop_test，验证脚本处理)
+- [ ] C-H6: bin/claude-session — settings.json 损坏时 session 仍能创建 (写入 `{bad}` 到 vscode settings，运行脚本，验证 tmux session 存在)
+- [ ] C-H8: bin/claude-session — tmux new-session 失败时 exit 1 (mock: tmux 不在PATH，验证错误输出和退出码)
+- [ ] C-H13: hooks/loop.sh — /tmp 无写权限模拟 (chmod 555 /tmp/claude_loop_test，验证脚本处理)
 
 ## G. Environment (HIGH priority)
 
-- [ ] G-EN1: claude-session.sh — 在 tmux 内运行时用 switch-client (在已有tmux session内执行，验证 TMUX env var 检测)
+- [ ] G-EN1: bin/claude-session — 在 tmux 内运行时用 switch-client (在已有tmux session内执行，验证 TMUX env var 检测)
 - [ ] G-EN4: 无 claude CLI 时的行为 (临时把 claude 从 PATH 移除，运行 claude-session，检查报错)
-- [ ] G-EN8: loop.sh — /tmp 不可写时的处理
+- [ ] G-EN8: hooks/loop.sh — /tmp 不可写时的处理
 
 ## H. Reliability (HIGH priority)
 
-- [ ] H-R2: claude-session.sh — 写 settings.json 原子性验证 (在写入过程中检查原始文件未被截断)
+- [ ] H-R2: bin/claude-session — 写 settings.json 原子性验证 (在写入过程中检查原始文件未被截断)
 - [ ] H-R3: setup-workspace.sh — 脚本中途被 SIGINT 中断后状态 (Ctrl+C 模拟，检查文件完整性)
-- [ ] H-R4: loop.sh — 同一 PWD 并发触发两次 (并行运行两次 hook，验证 counter 最终值正确)
+- [ ] H-R4: hooks/loop.sh — 同一 PWD 并发触发两次 (并行运行两次 hook，验证 counter 最终值正确)
 - [ ] H-R8: setup-workspace.sh — 磁盘空间不足模拟
 
 ## F. Integration (end-to-end)

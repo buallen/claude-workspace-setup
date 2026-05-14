@@ -14,6 +14,7 @@ info() { echo -e "${YELLOW}[..] $1${NC}"; }
 err()  { echo -e "${RED}[!!] $1${NC}"; }
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+INSTALL_DIR="$HOME/.claude/claude-workspace"
 
 echo ""
 echo "====================================="
@@ -36,41 +37,17 @@ else
   ok "tmux installed: $(tmux -V)"
 fi
 
-# ── Step 2: Create ~/.claude directory structure ──────────────────────────────
-info "Creating ~/.claude/hooks/ directory..."
-mkdir -p ~/.claude/hooks
-ok "Directory ready"
+# ── Step 2: Install workspace scripts ────────────────────────────────────────
+info "Installing workspace scripts..."
+mkdir -p "$INSTALL_DIR" ~/.claude/hooks ~/.local/bin
+rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/lib" "$INSTALL_DIR/hooks" "$INSTALL_DIR/config"
+cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INSTALL_DIR/"
+chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
+rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
+ln -sf "$INSTALL_DIR/bin/happy-vibe-session" ~/.local/bin/happy-vibe-session
+ok "Workspace scripts installed"
 
-# ── Step 3: Write claude-session.sh ──────────────────────────────────────────
-info "Writing ~/.claude/claude-session.sh..."
-cp "$REPO_DIR/claude-session.sh" ~/.claude/claude-session.sh
-chmod +x ~/.claude/claude-session.sh
-ok "claude-session.sh installed"
-
-info "Writing ~/.claude/happy-vibe-session.sh..."
-cp "$REPO_DIR/happy-vibe-session.sh" ~/.claude/happy-vibe-session.sh
-chmod +x ~/.claude/happy-vibe-session.sh
-mkdir -p ~/.local/bin
-ln -sf ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session
-ok "happy-vibe-session installed"
-
-# ── Step 4: Write loop.sh (L4 Stop Hook) ─────────────────────────────────────
-info "Writing ~/.claude/hooks/loop.sh..."
-if [ -f ~/.claude/hooks/loop.sh ]; then
-  ok "loop.sh already exists, skipping"
-else
-  cp "$REPO_DIR/loop.sh" ~/.claude/hooks/loop.sh
-  chmod +x ~/.claude/hooks/loop.sh
-  ok "loop.sh written"
-fi
-
-# ── Step 5: Write end-session.sh ─────────────────────────────────────────────
-info "Writing ~/.claude/end-session.sh..."
-cp "$REPO_DIR/end-session.sh" ~/.claude/end-session.sh
-chmod +x ~/.claude/end-session.sh
-ok "end-session.sh installed"
-
-# ── Step 6: Configure tmux ───────────────────────────────────────────────────
+# ── Step 3: Configure tmux ───────────────────────────────────────────────────
 info "Configuring tmux title forwarding..."
 TMUX_CONF="$HOME/.tmux.conf"
 if grep -q 'set-titles' "$TMUX_CONF" 2>/dev/null; then
@@ -91,7 +68,7 @@ if tmux list-sessions &>/dev/null; then
   tmux source "$TMUX_CONF" 2>/dev/null && ok "tmux config reloaded" || true
 fi
 
-# ── Step 7: Add shell aliases ────────────────────────────────────────────────
+# ── Step 4: Add shell aliases ────────────────────────────────────────────────
 info "Adding shell aliases to ~/.zshrc..."
 python3 - "$HOME/.zshrc" << 'PYTHON'
 import re
@@ -102,11 +79,11 @@ path = Path(sys.argv[1]).expanduser()
 text = path.read_text() if path.exists() else ""
 
 managed = """# Claude Code Workspace aliases
-alias claude-session="~/.claude/claude-session.sh"
-alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh"
-alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-session.sh'
-alias happy-vibe-session="~/.claude/happy-vibe-session.sh"
-alias end-session="~/.claude/end-session.sh"
+alias claude-session="~/.claude/claude-workspace/bin/claude-session"
+alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
+alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
+alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
+alias end-session="~/.claude/claude-workspace/bin/end-session"
 """
 
 patterns = [
@@ -124,15 +101,16 @@ print("  Claude workspace aliases updated")
 PYTHON
 ok "Aliases updated in ~/.zshrc"
 
-# ── Step 8: Configure VS Code ────────────────────────────────────────────────
+# ── Step 5: Configure VS Code ────────────────────────────────────────────────
 info "Configuring VS Code settings..."
 VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
 mkdir -p "$(dirname "$VSCODE_SETTINGS")"
 
-python3 - "$VSCODE_SETTINGS" << 'PYTHON'
+python3 - "$VSCODE_SETTINGS" "$INSTALL_DIR/bin/claude-session" << 'PYTHON'
 import json, sys, os, tempfile
 
 settings_path = sys.argv[1]
+claude_session_bin = sys.argv[2]
 
 try:
     with open(settings_path) as f:
@@ -149,11 +127,12 @@ if settings.get("terminal.integrated.tabs.title") != "${sequence}":
 
 # Happy Session terminal profile for one-click new sessions
 profiles = settings.get("terminal.integrated.profiles.osx", {})
-if "Happy Session" not in profiles:
-    profiles["Happy Session"] = {
-        "path": "zsh",
-        "args": ["-ic", "printf '\\nSession name: '; read -r name; [[ -z \"$name\" ]] && name=\"session-$(date +%H%M%S)\"; CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh \"$name\"; exec zsh -i"]
-    }
+happy_profile = {
+    "path": "zsh",
+    "args": ["-ic", f"printf '\\nSession name: '; read -r name; [[ -z \"$name\" ]] && name=\"session-$(date +%H%M%S)\"; CLAUDE_LAUNCHER=happy {claude_session_bin!r} \"$name\"; exec zsh -i"]
+}
+if profiles.get("Happy Session") != happy_profile:
+    profiles["Happy Session"] = happy_profile
     settings["terminal.integrated.profiles.osx"] = profiles
     changed = True
 
@@ -169,7 +148,7 @@ else:
 PYTHON
 ok "VS Code configured"
 
-# ── Step 9: Install VS Code extensions ───────────────────────────────────────
+# ── Step 6: Install VS Code extensions ───────────────────────────────────────
 info "Installing VS Code 'Restore Terminals' extension..."
 CODE_BIN=""
 if command -v code &>/dev/null; then
@@ -190,44 +169,46 @@ else
   echo "  Cmd+Shift+P → 'Shell Command: Install code in PATH', then rerun this script"
 fi
 
-# ── Step 10: Configure L4 Stop Hook ──────────────────────────────────────────
+# ── Step 7: Configure L4 Stop Hook ──────────────────────────────────────────
 info "Configuring L4 Stop Hook in ~/.claude/settings.json..."
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
 
-python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
+python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks/loop.sh" << 'PYTHON'
 import json, sys, os, tempfile
 
 settings_path = sys.argv[1]
+hook_cmd = sys.argv[2]
 try:
     with open(settings_path) as f:
         settings = json.load(f)
 except (json.JSONDecodeError, FileNotFoundError):
     settings = {}
 
-hook_cmd = os.path.expanduser("~/.claude/hooks/loop.sh")
 hooks = settings.setdefault("hooks", {})
 stop_hooks = hooks.setdefault("Stop", [])
 
-already = any(
-    h.get("command") == hook_cmd
-    for group in stop_hooks
-    for h in group.get("hooks", [])
-)
+for group in stop_hooks:
+    group["hooks"] = [
+        h for h in group.get("hooks", [])
+        if h.get("command") not in {
+            os.path.expanduser("~/.claude/hooks/loop.sh"),
+            hook_cmd,
+        }
+    ]
 
-if not already:
-    stop_hooks.append({
-        "matcher": "",
-        "hooks": [{"type": "command", "command": hook_cmd, "timeout": 10, "statusMessage": "Checking task list..."}]
-    })
-    dir_ = os.path.dirname(settings_path)
-    with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
-        json.dump(settings, tf, indent=2, ensure_ascii=False)
-        tmp_path = tf.name
-    os.replace(tmp_path, settings_path)
-    print("  Stop Hook added")
-else:
-    print("  Stop Hook already configured")
+stop_hooks[:] = [group for group in stop_hooks if group.get("hooks")]
+stop_hooks.append({
+    "matcher": "",
+    "hooks": [{"type": "command", "command": hook_cmd, "timeout": 10, "statusMessage": "Checking task list..."}]
+})
+
+dir_ = os.path.dirname(settings_path)
+with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
+    json.dump(settings, tf, indent=2, ensure_ascii=False)
+    tmp_path = tf.name
+os.replace(tmp_path, settings_path)
+print("  Stop Hook configured")
 PYTHON
 ok "Stop Hook configured"
 

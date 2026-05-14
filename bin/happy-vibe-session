@@ -1,11 +1,17 @@
 #!/bin/bash
-# Start a Happy Coder tmux session through VibeProxy without modifying the
-# existing happy-session / claude-session scripts.
+# Start a Happy Coder tmux session through VibeProxy/Codex.
 
 set -euo pipefail
 
-MODEL="gpt-5.5"
-EFFORT="max"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+[ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
+source "$REPO_DIR/lib/session.sh"
+
+MODEL="${VIBEPROXY_DEFAULT_MODEL:-gpt-5.5}"
+EFFORT="${VIBEPROXY_DEFAULT_EFFORT:-max}"
+VIBEPROXY_BASE_URL="${VIBEPROXY_BASE_URL:-http://localhost:8317}"
+VIBEPROXY_API_KEY="${VIBEPROXY_API_KEY:-vibeproxy}"
 RESTART="false"
 
 usage() {
@@ -13,14 +19,13 @@ usage() {
 Usage: happy-vibe-session [--restart] [--model MODEL] [--effort LEVEL] <task-name> [session-id]
 
 Examples:
-  happy-vibe-session TroubleShooting
-  happy-vibe-session --restart TroubleShooting
-  happy-vibe-session --model gpt-5.3-codex TroubleShooting
-  happy-vibe-session --effort high TroubleShooting
+  happy-vibe-session GCP
+  happy-vibe-session --restart GCP 5432a2e4-fc63-44de-86c5-7c9d318c7829
+  happy-vibe-session --model gpt-5.4 --effort high GCP
 
-Notes:
-  Existing live tmux sessions are attached unchanged. Use --restart when you
-  want to kill and recreate the tmux session with VibeProxy.
+Defaults:
+  model:  gpt-5.5
+  effort: max
 EOF
 }
 
@@ -31,27 +36,15 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --model)
-      if [ "$#" -lt 2 ]; then
-        echo "Missing value for --model" >&2
-        exit 2
-      fi
+      [ "$#" -ge 2 ] || { echo "Missing value for --model" >&2; exit 2; }
       MODEL="$2"
       shift 2
       ;;
     --effort)
-      if [ "$#" -lt 2 ]; then
-        echo "Missing value for --effort" >&2
-        exit 2
-      fi
+      [ "$#" -ge 2 ] || { echo "Missing value for --effort" >&2; exit 2; }
       case "$2" in
-        low|medium|high|max)
-          EFFORT="$2"
-          ;;
-        *)
-          echo "Invalid --effort value: $2" >&2
-          echo "Allowed values: low, medium, high, max" >&2
-          exit 2
-          ;;
+        low|medium|high|max) EFFORT="$2" ;;
+        *) echo "Invalid --effort value: $2" >&2; echo "Allowed values: low, medium, high, max" >&2; exit 2 ;;
       esac
       shift 2
       ;;
@@ -94,10 +87,10 @@ if ! lsof -i :8317 -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! curl -fsS --max-time 10 http://127.0.0.1:8317/v1/models | grep -q "\"id\":\"${MODEL}\""; then
+if ! curl -fsS --max-time 10 "$VIBEPROXY_BASE_URL/v1/models" | grep -q "\"id\":\"${MODEL}\""; then
   echo "VibeProxy is running, but model '${MODEL}' is not available." >&2
   echo "Available models:" >&2
-  curl -fsS --max-time 10 http://127.0.0.1:8317/v1/models \
+  curl -fsS --max-time 10 "$VIBEPROXY_BASE_URL/v1/models" \
     | tr '{},' '\n' \
     | sed -n 's/.*"id":"\([^"]*\)".*/  \1/p' >&2
   exit 1
@@ -109,18 +102,18 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   else
     echo "tmux session '$SESSION_NAME' already exists." >&2
     echo "Run with --restart to recreate it with VibeProxy, or exit happy inside the pane first." >&2
-    exec tmux attach -t "$SESSION_NAME"
+    attach_or_switch "$SESSION_NAME"
   fi
 fi
 
-SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
-mkdir -p "$SESSION_DIR"
+SESSION_DIR="$(session_dir "$SESSION_NAME")"
+ensure_session_dir "$SESSION_NAME"
 
 ENV_PREFIX=$(printf '%q ' \
   env \
   HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}" \
-  ANTHROPIC_BASE_URL="http://localhost:8317" \
-  ANTHROPIC_AUTH_TOKEN="vibeproxy" \
+  ANTHROPIC_BASE_URL="$VIBEPROXY_BASE_URL" \
+  ANTHROPIC_AUTH_TOKEN="$VIBEPROXY_API_KEY" \
   ANTHROPIC_API_KEY="" \
   DISABLE_TELEMETRY="true" \
   DISABLE_COST_WARNINGS="true" \
@@ -142,10 +135,5 @@ echo "New VibeProxy Happy session: $SESSION_NAME"
 echo "Model: $MODEL"
 echo "Effort: $EFFORT"
 
-printf '\e]7;file://%s%s\a' "$(hostname)" "$SESSION_DIR"
-
-if [ -n "${TMUX:-}" ]; then
-  exec tmux switch-client -t "$SESSION_NAME"
-else
-  exec tmux attach -t "$SESSION_NAME"
-fi
+emit_vscode_cwd "$SESSION_DIR"
+attach_or_switch "$SESSION_NAME"
