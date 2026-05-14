@@ -27,7 +27,7 @@ extra wrapper layer.
 
 - creates or restarts the tmux session
 - points Claude Code at VibeProxy's Anthropic-compatible API
-- launches Happy with `--model` and `--effort`
+- launches Happy with `--model=...` and `--effort=...` so those flags reach Claude Code
 
 `bin/end-session`
 

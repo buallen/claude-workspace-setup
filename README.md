@@ -120,7 +120,7 @@ For VibeProxy:
 happy-vibe-session "GCP"
   -> tmux session "GCP"
   -> env ANTHROPIC_BASE_URL=http://localhost:8317 ...
-  -> happy --yolo --model gpt-5.5 --effort max
+  -> happy --yolo --model=gpt-5.5 --effort=max
 ```
 
 For Codex:

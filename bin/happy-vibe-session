@@ -126,10 +126,13 @@ ENV_PREFIX=$(printf '%q ' \
   DISABLE_COST_WARNINGS="true" \
   API_TIMEOUT_MS="600000")
 
+MODEL_ARG="--model=$MODEL"
+EFFORT_ARG="--effort=$EFFORT"
+
 if [ -n "$RESOLVED_SESSION_ID" ]; then
-  HAPPY_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --model "$MODEL" --effort "$EFFORT" --resume "$RESOLVED_SESSION_ID")"
+  HAPPY_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo "$MODEL_ARG" "$EFFORT_ARG" --resume "$RESOLVED_SESSION_ID")"
 else
-  HAPPY_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --model "$MODEL" --effort "$EFFORT" --continue)"
+  HAPPY_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo "$MODEL_ARG" "$EFFORT_ARG" --continue)"
 fi
 
 if ! tmux new-session -d -s "$SESSION_NAME" -c "$SESSION_DIR"; then
