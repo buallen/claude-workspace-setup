@@ -93,27 +93,36 @@ fi
 
 # ── Step 7: Add shell aliases ────────────────────────────────────────────────
 info "Adding shell aliases to ~/.zshrc..."
-if grep -q 'alias claude-session\|alias happy-session' ~/.zshrc 2>/dev/null; then
-  ok "Aliases already present in ~/.zshrc"
-else
-  cat >> ~/.zshrc << 'ALIAS_EOF'
+python3 - "$HOME/.zshrc" << 'PYTHON'
+import re
+import sys
+from pathlib import Path
 
-# Claude Code Workspace aliases
+path = Path(sys.argv[1]).expanduser()
+text = path.read_text() if path.exists() else ""
+
+managed = """# Claude Code Workspace aliases
 alias claude-session="~/.claude/claude-session.sh"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh"
-alias end-session="~/.claude/end-session.sh"
-ALIAS_EOF
-  ok "Aliases added to ~/.zshrc"
-fi
-
-if grep -q 'alias happy-vibe-session=' ~/.zshrc 2>/dev/null; then
-  ok "happy-vibe-session alias already present in ~/.zshrc"
-else
-  cat >> ~/.zshrc << 'ALIAS_EOF'
+alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-session.sh'
 alias happy-vibe-session="~/.claude/happy-vibe-session.sh"
-ALIAS_EOF
-  ok "happy-vibe-session alias added to ~/.zshrc"
-fi
+alias end-session="~/.claude/end-session.sh"
+"""
+
+patterns = [
+    r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|end-session)=.*\n)+",
+    r"\n?# Happy session private mode[^\n]*\n(?:alias happy-session-private=.*\n)+",
+    r"\n?# Claude Code via VibeProxy[\s\S]*?alias claude-codex=.*\n",
+]
+
+for pattern in patterns:
+    text = re.sub(pattern, "\n", text)
+
+text = text.rstrip() + "\n\n" + managed
+path.write_text(text)
+print("  Claude workspace aliases updated")
+PYTHON
+ok "Aliases updated in ~/.zshrc"
 
 # ── Step 8: Configure VS Code ────────────────────────────────────────────────
 info "Configuring VS Code settings..."
