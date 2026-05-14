@@ -18,6 +18,7 @@ MODEL="${VIBEPROXY_DEFAULT_MODEL:-gpt-5.5}"
 EFFORT="${VIBEPROXY_DEFAULT_EFFORT:-max}"
 VIBEPROXY_BASE_URL="${VIBEPROXY_BASE_URL:-http://localhost:8317}"
 VIBEPROXY_API_KEY="${VIBEPROXY_API_KEY:-vibeproxy}"
+VSCODE_SETTINGS="${VSCODE_SETTINGS:-$HOME/Library/Application Support/Code/User/settings.json}"
 RESTART="false"
 
 usage() {
@@ -102,23 +103,96 @@ if ! curl -fsS --max-time 10 "$VIBEPROXY_BASE_URL/v1/models" | grep -q "\"id\":\
   exit 1
 fi
 
+SESSION_DIR="$(session_dir "$SESSION_NAME")"
+ensure_session_dir "$SESSION_NAME"
+
+session_process_tree() {
+  local root_pid="$1"
+  ps axeww -o pid=,ppid=,command= | awk -v root="$root_pid" '
+    {
+      pid=$1
+      ppid=$2
+      $1=""
+      $2=""
+      sub(/^[[:space:]]+/, "", $0)
+      parent[pid]=ppid
+      command[pid]=$0
+    }
+    END {
+      seen[root]=1
+      changed=1
+      while (changed) {
+        changed=0
+        for (pid in parent) {
+          if (!seen[pid] && seen[parent[pid]]) {
+            seen[pid]=1
+            changed=1
+          }
+        }
+      }
+      for (pid in seen) {
+        print command[pid]
+      }
+    }
+  '
+}
+
+session_is_current_vibe() {
+  local pane_pid pane_path process_tree option_config
+  pane_pid="$(tmux display-message -p -t "$SESSION_NAME" '#{pane_pid}' 2>/dev/null || true)"
+  pane_path="$(tmux display-message -p -t "$SESSION_NAME" '#{pane_current_path}' 2>/dev/null || true)"
+  [ -n "$pane_pid" ] || return 1
+  [ "$pane_path" = "$SESSION_DIR" ] || return 1
+
+  process_tree="$(session_process_tree "$pane_pid")"
+  grep -Fq -- "--model=$MODEL" <<<"$process_tree" || return 1
+  grep -Fq -- "--effort=$EFFORT" <<<"$process_tree" || return 1
+
+  option_config="$(tmux show-option -qv -t "$SESSION_NAME" @happy_vibe_config_dir 2>/dev/null || true)"
+  if [ -n "$option_config" ]; then
+    [ "$option_config" = "$CLAUDE_CONFIG_DIR" ] || return 1
+  elif grep -Fq "CLAUDE_CONFIG_DIR=" <<<"$process_tree"; then
+    grep -Fq "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" <<<"$process_tree" || return 1
+  else
+    [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] || return 1
+  fi
+}
+
+restore_command() {
+  local command_parts=() quoted
+  if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
+    command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  fi
+  command_parts+=("$SCRIPT_DIR/happy-vibe-session" "$SESSION_NAME")
+  if [ -n "$RESOLVED_SESSION_ID" ]; then
+    command_parts+=("$RESOLVED_SESSION_ID")
+  fi
+  printf -v quoted '%q ' "${command_parts[@]}"
+  printf '%s' "${quoted% }"
+}
+
+register_vscode_restore() {
+  python3 "$REPO_DIR/lib/vscode_restore.py" register-command "$VSCODE_SETTINGS" "$SESSION_NAME" "$(restore_command)"
+}
+
+RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
+
 if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   if [ "$RESTART" = "true" ]; then
     tmux kill-session -t "$SESSION_NAME"
-  else
-    echo "tmux session '$SESSION_NAME' already exists." >&2
-    echo "Run with --restart to recreate it with VibeProxy, or exit happy inside the pane first." >&2
+  elif session_is_current_vibe; then
+    register_vscode_restore
     attach_or_switch "$SESSION_NAME"
+  else
+    echo "tmux session '$SESSION_NAME' exists but was not launched with the current VibeProxy settings; recreating it." >&2
+    tmux kill-session -t "$SESSION_NAME"
   fi
 fi
-
-SESSION_DIR="$(session_dir "$SESSION_NAME")"
-ensure_session_dir "$SESSION_NAME"
-RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
 
 ENV_PREFIX=$(printf '%q ' \
   env \
   HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}" \
+  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   ANTHROPIC_BASE_URL="$VIBEPROXY_BASE_URL" \
   ANTHROPIC_AUTH_TOKEN="$VIBEPROXY_API_KEY" \
   ANTHROPIC_API_KEY="" \
@@ -141,6 +215,10 @@ if ! tmux new-session -d -s "$SESSION_NAME" -c "$SESSION_DIR"; then
 fi
 
 tmux send-keys -t "$SESSION_NAME" "$HAPPY_CMD" Enter
+tmux set-option -q -t "$SESSION_NAME" @happy_vibe_config_dir "$CLAUDE_CONFIG_DIR"
+tmux set-option -q -t "$SESSION_NAME" @happy_vibe_model "$MODEL"
+tmux set-option -q -t "$SESSION_NAME" @happy_vibe_effort "$EFFORT"
+register_vscode_restore
 echo "New VibeProxy Happy session: $SESSION_NAME"
 echo "Model: $MODEL"
 echo "Effort: $EFFORT"

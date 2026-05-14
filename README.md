@@ -85,9 +85,11 @@ session-restore-mode happy
 ```
 
 `session-restore-mode vibe` rewrites saved Restore Terminals commands from
-`happy-session ...` to `happy-vibe-session --restart ...`. This is intentional:
-VS Code restore should recreate the tmux session through VibeProxy instead of only
-attaching to an existing tmux session that was started with the old launcher.
+`happy-session ...` to `happy-vibe-session ...`. The launcher attaches to an
+already-correct VibeProxy tmux session, and only recreates it when the existing
+tmux session was started with old/non-Vibe settings. Environment-specific
+sessions keep their environment, so a private session with
+`CLAUDE_CONFIG_DIR=~/.claude-private` stays private after switching modes.
 
 ## Installed Aliases
 
@@ -119,6 +121,7 @@ For VibeProxy:
 ```text
 happy-vibe-session "GCP"
   -> tmux session "GCP"
+  -> preserves CLAUDE_CONFIG_DIR when a session uses a private config
   -> env ANTHROPIC_BASE_URL=http://localhost:8317 ...
   -> happy --yolo --model=gpt-5.5 --effort=max
 ```

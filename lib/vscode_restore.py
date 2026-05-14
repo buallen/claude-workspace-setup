@@ -127,17 +127,15 @@ def target_command(target):
     return str(base / "claude-session")
 
 
-def ensure_restart(parts):
-    if "--restart" not in parts:
-        parts.insert(1, "--restart")
-    return parts
-
-
 def first_command_index(parts):
     for index, part in enumerate(parts):
         if "=" not in part:
             return index
     return 0
+
+
+def preserved_env(parts):
+    return [part for part in parts if not part.startswith("CLAUDE_LAUNCHER=")]
 
 
 def switch_command(command, target):
@@ -150,14 +148,24 @@ def switch_command(command, target):
         return command
 
     index = first_command_index(parts)
+    env_parts = preserved_env(parts[:index])
     current = command_name(parts[index])
-    if target == "vibe" and current in {"happy-session", "claude-session", "happy-vibe-session"}:
-        parts = parts[index:]
-        parts[0] = target_command("vibe")
-        parts = ensure_restart(parts)
+    if current == "happy-session-private" and not any(
+        part.startswith("CLAUDE_CONFIG_DIR=") for part in env_parts
+    ):
+        env_parts.append(f"CLAUDE_CONFIG_DIR={Path.home() / '.claude-private'}")
+
+    if target == "vibe" and current in {
+        "happy-session",
+        "happy-session-private",
+        "claude-session",
+        "happy-vibe-session",
+    }:
+        args = [part for part in parts[index + 1:] if part != "--restart"]
+        parts = env_parts + [target_command("vibe")] + args
     elif target == "happy" and current == "happy-vibe-session":
         remainder = [part for part in parts[index + 1:] if part != "--restart"]
-        parts = ["CLAUDE_LAUNCHER=happy", target_command("happy")] + remainder
+        parts = ["CLAUDE_LAUNCHER=happy"] + env_parts + [target_command("happy")] + remainder
     else:
         return command
 

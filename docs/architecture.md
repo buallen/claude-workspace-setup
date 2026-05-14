@@ -26,8 +26,10 @@ extra wrapper layer.
 `bin/happy-vibe-session`
 
 - creates or restarts the tmux session
+- preserves `CLAUDE_CONFIG_DIR`, including private Claude config directories
 - points Claude Code at VibeProxy's Anthropic-compatible API
 - launches Happy with `--model=...` and `--effort=...` so those flags reach Claude Code
+- registers the VS Code Restore Terminals command without `--restart`
 
 `bin/end-session`
 
@@ -38,8 +40,9 @@ extra wrapper layer.
 
 - lists saved VS Code Restore Terminals commands
 - switches saved commands between `happy-session` and `happy-vibe-session`
-- uses `--restart` for VibeProxy restore commands so VS Code recreates existing
-  tmux sessions with the VibeProxy launcher instead of only attaching to them
+- preserves environment prefixes such as `CLAUDE_CONFIG_DIR=~/.claude-private`
+- lets `happy-vibe-session` decide whether to attach to an existing VibeProxy
+  tmux session or recreate an old/non-Vibe session
 - does not affect currently running tmux sessions
 
 `bin/codex-session`
