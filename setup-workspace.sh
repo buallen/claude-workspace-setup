@@ -129,6 +129,18 @@ if settings.get("terminal.integrated.tabs.title") != "${sequence}":
     settings["terminal.integrated.tabs.title"] = "${sequence}"
     changed = True
 
+# Let Restore Terminals run the configured launch commands on window restore.
+# VS Code's own terminal persistence otherwise revives old `tmux attach`
+# processes and skips the happy-session launch commands.
+desired_terminal_settings = {
+    "terminal.integrated.enablePersistentSessions": False,
+    "terminal.integrated.persistentSessionReviveProcess": "never",
+}
+for key, value in desired_terminal_settings.items():
+    if settings.get(key) != value:
+        settings[key] = value
+        changed = True
+
 # Happy Session terminal profile for one-click new sessions
 profiles = settings.get("terminal.integrated.profiles.osx", {})
 happy_profile = {

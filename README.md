@@ -85,9 +85,9 @@ session-restore-mode happy
 ```
 
 `session-restore-mode vibe` rewrites saved Restore Terminals commands from
-`happy-session ...` to `happy-vibe-session ...`. It does not kill or restart
-currently running tmux sessions; it only changes what VS Code will run next time
-it restores terminal tabs.
+`happy-session ...` to `happy-vibe-session --restart ...`. This is intentional:
+VS Code restore should recreate the tmux session through VibeProxy instead of only
+attaching to an existing tmux session that was started with the old launcher.
 
 ## Installed Aliases
 

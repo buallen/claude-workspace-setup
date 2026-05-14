@@ -38,6 +38,8 @@ extra wrapper layer.
 
 - lists saved VS Code Restore Terminals commands
 - switches saved commands between `happy-session` and `happy-vibe-session`
+- uses `--restart` for VibeProxy restore commands so VS Code recreates existing
+  tmux sessions with the VibeProxy launcher instead of only attaching to them
 - does not affect currently running tmux sessions
 
 `bin/codex-session`

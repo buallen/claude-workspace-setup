@@ -24,7 +24,7 @@ Usage: session-restore-mode list
 Commands:
   list   Show saved VS Code restore commands.
   happy  Switch saved happy-vibe-session restore commands back to happy-session.
-  vibe   Switch saved happy-session restore commands to happy-vibe-session.
+  vibe   Switch saved happy-session restore commands to happy-vibe-session --restart.
 EOF
 }
 

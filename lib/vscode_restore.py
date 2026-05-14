@@ -127,6 +127,12 @@ def target_command(target):
     return str(base / "claude-session")
 
 
+def ensure_restart(parts):
+    if "--restart" not in parts:
+        parts.insert(1, "--restart")
+    return parts
+
+
 def first_command_index(parts):
     for index, part in enumerate(parts):
         if "=" not in part:
@@ -148,8 +154,10 @@ def switch_command(command, target):
     if target == "vibe" and current in {"happy-session", "claude-session", "happy-vibe-session"}:
         parts = parts[index:]
         parts[0] = target_command("vibe")
+        parts = ensure_restart(parts)
     elif target == "happy" and current == "happy-vibe-session":
-        parts = ["CLAUDE_LAUNCHER=happy", target_command("happy")] + parts[index + 1:]
+        remainder = [part for part in parts[index + 1:] if part != "--restart"]
+        parts = ["CLAUDE_LAUNCHER=happy", target_command("happy")] + remainder
     else:
         return command
 
