@@ -40,6 +40,13 @@ extra wrapper layer.
 - switches saved commands between `happy-session` and `happy-vibe-session`
 - does not affect currently running tmux sessions
 
+`bin/codex-session`
+
+- creates `~/codex-sessions/<name>`
+- starts or attaches to tmux session `codex-<name>`
+- launches Codex with `--cd` pointed at that fixed folder
+- registers the terminal with VS Code Restore Terminals as `Codex: <name>`
+
 ## Shared Helpers
 
 `lib/session.sh` owns shell-level session mechanics:

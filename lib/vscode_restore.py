@@ -61,6 +61,34 @@ def register(settings_path, session_name, command_name, session_id=""):
         save(settings_path, settings)
 
 
+def register_command(settings_path, restore_name, restore_cmd):
+    settings = load(settings_path)
+    terminals = settings.get("restoreTerminals.terminals", [])
+
+    existing = None
+    for terminal in terminals:
+        for split in terminal.get("splitTerminals", []):
+            if split.get("name") == restore_name:
+                existing = split
+                break
+
+    changed = False
+    if existing is None:
+        terminals.append({"splitTerminals": [{"name": restore_name, "commands": [restore_cmd]}]})
+        settings["restoreTerminals.terminals"] = terminals
+        changed = True
+    elif existing.get("commands", [""])[0] != restore_cmd:
+        existing["commands"] = [restore_cmd]
+        changed = True
+
+    if settings.get("terminal.integrated.tabs.title") != "${sequence}":
+        settings["terminal.integrated.tabs.title"] = "${sequence}"
+        changed = True
+
+    if changed:
+        save(settings_path, settings)
+
+
 def remove(settings_path, session_name):
     settings = load(settings_path)
     terminals = settings.get("restoreTerminals.terminals", [])
@@ -153,6 +181,9 @@ def main():
     if command == "register" and len(sys.argv) == 6:
         _, _, settings_path, session_name, command_name, session_id = sys.argv
         register(settings_path, session_name, command_name, session_id)
+    elif command == "register-command" and len(sys.argv) == 5:
+        _, _, settings_path, restore_name, restore_cmd = sys.argv
+        register_command(settings_path, restore_name, restore_cmd)
     elif command == "remove" and len(sys.argv) == 4:
         _, _, settings_path, session_name = sys.argv
         remove(settings_path, session_name)
@@ -165,6 +196,7 @@ def main():
     else:
         print(
             "Usage: vscode_restore.py register <settings> <session-name> <command-name> <session-id>\n"
+            "       vscode_restore.py register-command <settings> <restore-name> <restore-command>\n"
             "       vscode_restore.py remove <settings> <session-name>\n"
             "       vscode_restore.py list <settings>\n"
             "       vscode_restore.py switch <settings> happy|vibe",

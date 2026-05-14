@@ -1,0 +1,114 @@
+#!/bin/bash
+# Usage: codex-session "task name" [session-id]
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+[ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
+source "$REPO_DIR/lib/session.sh"
+
+MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.5}"
+SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
+APPROVAL="${CODEX_APPROVAL:-never}"
+RESTART="false"
+
+usage() {
+  cat <<'EOF'
+Usage: codex-session [--restart] [--model MODEL] <task-name> [session-id]
+
+Examples:
+  codex-session Workspace
+  codex-session Workspace --last
+  codex-session --restart Workspace
+  codex-session --model gpt-5.4 Workspace
+
+Defaults:
+  folder:  ~/codex-sessions/<task-name>
+  model:   gpt-5.5
+  sandbox: danger-full-access
+  approval: never
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --restart)
+      RESTART="true"
+      shift
+      ;;
+    --model)
+      [ "$#" -ge 2 ] || { echo "Missing value for --model" >&2; exit 2; }
+      MODEL="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+SESSION_NAME="${1:-}"
+SESSION_ID="${2:-}"
+
+if [ -z "$SESSION_NAME" ]; then
+  usage >&2
+  exit 2
+fi
+
+TMUX_SESSION="codex-${SESSION_NAME}"
+RESTORE_NAME="Codex: ${SESSION_NAME}"
+SESSION_DIR="${CODEX_SESSION_ROOT:-$HOME/codex-sessions}/$SESSION_NAME"
+VSCODE_SETTINGS="${VSCODE_SETTINGS:-$HOME/Library/Application Support/Code/User/settings.json}"
+
+mkdir -p "$SESSION_DIR"
+echo -ne "\033]0;${RESTORE_NAME}\007"
+
+if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+  if [ "$RESTART" = "true" ]; then
+    tmux kill-session -t "$TMUX_SESSION"
+  else
+    echo "Restored session: $RESTORE_NAME"
+    emit_vscode_cwd "$SESSION_DIR"
+    attach_or_switch "$TMUX_SESSION"
+  fi
+fi
+
+if [ -n "$SESSION_ID" ]; then
+  CODEX_CMD=$(printf '%q ' codex resume --cd "$SESSION_DIR" --model "$MODEL" --sandbox "$SANDBOX" --ask-for-approval "$APPROVAL" "$SESSION_ID")
+  RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME" "$SESSION_ID")
+else
+  CODEX_CMD=$(printf '%q ' codex --cd "$SESSION_DIR" --model "$MODEL" --sandbox "$SANDBOX" --ask-for-approval "$APPROVAL")
+  RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME")
+fi
+
+if ! tmux new-session -d -s "$TMUX_SESSION" -c "$SESSION_DIR" "$CODEX_CMD"; then
+  echo "Error: failed to create tmux session '$TMUX_SESSION'" >&2
+  exit 1
+fi
+
+python3 "$REPO_DIR/lib/vscode_restore.py" register-command "$VSCODE_SETTINGS" "$RESTORE_NAME" "$RESTORE_CMD"
+
+echo "New Codex session: $RESTORE_NAME"
+echo "Folder: $SESSION_DIR"
+echo "Model: $MODEL"
+
+emit_vscode_cwd "$SESSION_DIR"
+attach_or_switch "$TMUX_SESSION"

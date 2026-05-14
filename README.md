@@ -65,6 +65,18 @@ End a session and remove it from VS Code restore:
 end-session "GCP"
 ```
 
+Start or attach to a named Codex session:
+
+```bash
+codex-session "Workspace"
+codex-session "Workspace" --last
+codex-session "Workspace" <codex-session-id>
+```
+
+Codex sessions use `~/codex-sessions/<name>` as their fixed working folder and
+tmux session names like `codex-Workspace`, so they do not collide with
+Claude/Happy tabs named `Workspace`.
+
 Switch saved VS Code restored tabs between normal Happy and VibeProxy:
 
 ```bash
@@ -87,6 +99,7 @@ alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
+alias codex-session="~/.claude/claude-workspace/bin/codex-session"
 alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 ```
@@ -109,6 +122,15 @@ happy-vibe-session "GCP"
   -> tmux session "GCP"
   -> env ANTHROPIC_BASE_URL=http://localhost:8317 ...
   -> happy --yolo --model gpt-5.5 --effort max
+```
+
+For Codex:
+
+```text
+VS Code terminal tab "Codex: Workspace"
+  -> codex-session "Workspace"
+  -> tmux session "codex-Workspace"
+  -> codex --cd ~/codex-sessions/Workspace --model gpt-5.5
 ```
 
 ## Repository Layout
