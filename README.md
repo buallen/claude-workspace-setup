@@ -33,6 +33,7 @@ source ~/.zshrc
 The script handles everything:
 - Installs tmux (via Homebrew if not present)
 - Installs all scripts to `~/.claude/`
+- Installs `happy-vibe-session` to `~/.local/bin/` for VibeProxy/Codex-backed sessions
 - Adds shell aliases to `~/.zshrc`
 - Configures VS Code: tab titles + **Happy Session** terminal profile
 - Configures the L4 Loop Stop Hook in `~/.claude/settings.json`
@@ -57,6 +58,21 @@ happy-session "Task Name" <conversation-id>
 ```
 
 Loads a specific conversation ID into a named tab. The script searches all Claude project directories for the session file and links it where `--resume` can find it. If the session file doesn't exist anywhere, it warns and falls back to `--continue` so the session always starts rather than silently exiting.
+
+### Use Happy through VibeProxy / Codex
+
+```bash
+happy-vibe-session "Task Name"
+happy-vibe-session --restart "Task Name" <conversation-id>
+```
+
+This starts Happy through VibeProxy's Anthropic-compatible endpoint using `gpt-5.5` and `--effort max` by default. VibeProxy must be running and connected to Codex first.
+
+You can override the model or effort:
+
+```bash
+happy-vibe-session --model gpt-5.4 --effort high "Task Name"
+```
 
 ### Use plain Claude instead of Happy
 
@@ -101,6 +117,7 @@ Type a name and press Enter. A new Happy session starts immediately, named and c
 |------|---------|
 | `setup-workspace.sh` | One-click setup script |
 | `claude-session.sh` | Start/restore a named Claude or Happy session |
+| `happy-vibe-session.sh` | Start/restore a Happy session through VibeProxy/Codex |
 | `end-session.sh` | Kill a session and clean up VS Code settings |
 | `loop.sh` | L4 Stop Hook — drives task list automation |
 

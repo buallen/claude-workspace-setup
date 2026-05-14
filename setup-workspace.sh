@@ -47,6 +47,13 @@ cp "$REPO_DIR/claude-session.sh" ~/.claude/claude-session.sh
 chmod +x ~/.claude/claude-session.sh
 ok "claude-session.sh installed"
 
+info "Writing ~/.claude/happy-vibe-session.sh..."
+cp "$REPO_DIR/happy-vibe-session.sh" ~/.claude/happy-vibe-session.sh
+chmod +x ~/.claude/happy-vibe-session.sh
+mkdir -p ~/.local/bin
+ln -sf ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session
+ok "happy-vibe-session installed"
+
 # ── Step 4: Write loop.sh (L4 Stop Hook) ─────────────────────────────────────
 info "Writing ~/.claude/hooks/loop.sh..."
 if [ -f ~/.claude/hooks/loop.sh ]; then
@@ -97,6 +104,15 @@ alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-session.sh"
 alias end-session="~/.claude/end-session.sh"
 ALIAS_EOF
   ok "Aliases added to ~/.zshrc"
+fi
+
+if grep -q 'alias happy-vibe-session=' ~/.zshrc 2>/dev/null; then
+  ok "happy-vibe-session alias already present in ~/.zshrc"
+else
+  cat >> ~/.zshrc << 'ALIAS_EOF'
+alias happy-vibe-session="~/.claude/happy-vibe-session.sh"
+ALIAS_EOF
+  ok "happy-vibe-session alias added to ~/.zshrc"
 fi
 
 # ── Step 8: Configure VS Code ────────────────────────────────────────────────
@@ -215,6 +231,7 @@ echo ""
 echo "Reload your shell:    source ~/.zshrc"
 echo ""
 echo "New happy session:    happy-session 'My Task'"
+echo "New VibeProxy session: happy-vibe-session 'My Task'"
 echo "New claude session:   claude-session 'My Task'"
 echo "End a session:        end-session 'My Task'"
 echo ""
