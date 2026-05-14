@@ -14,22 +14,26 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 [ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
 source "$REPO_DIR/lib/session.sh"
 
-MODEL=""
+MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.5}"
+EFFORT="${CODEX_DEFAULT_EFFORT:-xhigh}"
+HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}"
 RESTART="false"
 
 usage() {
   cat <<'EOF'
-Usage: codex-session [--restart] [--model MODEL] <task-name> [session-id]
+Usage: codex-session [--restart] [--model MODEL] [--effort LEVEL] <task-name> [session-id]
 
 Examples:
   codex-session Workspace
   codex-session Workspace <codex-session-id>
   codex-session --restart Workspace
   codex-session --model gpt-5.5 Workspace
+  codex-session --effort xhigh Workspace
 
 Defaults:
   folder:  ~/codex-sessions/<task-name>
   model:   gpt-5.5
+  effort:  xhigh
   runner:  happy codex
 EOF
 }
@@ -43,6 +47,14 @@ while [ "$#" -gt 0 ]; do
     --model)
       [ "$#" -ge 2 ] || { echo "Missing value for --model" >&2; exit 2; }
       MODEL="$2"
+      shift 2
+      ;;
+    --effort)
+      [ "$#" -ge 2 ] || { echo "Missing value for --effort" >&2; exit 2; }
+      case "$2" in
+        low|medium|high|xhigh) EFFORT="$2" ;;
+        *) echo "Invalid --effort value: $2" >&2; echo "Allowed values: low, medium, high, xhigh" >&2; exit 2 ;;
+      esac
       shift 2
       ;;
     -h|--help)
@@ -80,12 +92,20 @@ echo -ne "\033]0;${RESTORE_NAME}\007"
 
 mkdir -p "$HOME/.codex"
 if [ ! -f "$HOME/.codex/config.toml" ]; then
-  printf 'model = "%s"\n' "$MODEL" > "$HOME/.codex/config.toml"
+  printf 'model = "%s"\nmodel_reasoning_effort = "%s"\n' "$MODEL" "$EFFORT" > "$HOME/.codex/config.toml"
 elif grep -q '^model = ' "$HOME/.codex/config.toml"; then
   perl -0pi -e "s/^model = .*/model = \"$MODEL\"/m" "$HOME/.codex/config.toml"
 else
   tmp_file=$(mktemp)
   printf 'model = "%s"\n' "$MODEL" > "$tmp_file"
+  cat "$HOME/.codex/config.toml" >> "$tmp_file"
+  mv "$tmp_file" "$HOME/.codex/config.toml"
+fi
+if grep -q '^model_reasoning_effort = ' "$HOME/.codex/config.toml"; then
+  perl -0pi -e "s/^model_reasoning_effort = .*/model_reasoning_effort = \"$EFFORT\"/m" "$HOME/.codex/config.toml"
+else
+  tmp_file=$(mktemp)
+  printf 'model_reasoning_effort = "%s"\n' "$EFFORT" > "$tmp_file"
   cat "$HOME/.codex/config.toml" >> "$tmp_file"
   mv "$tmp_file" "$HOME/.codex/config.toml"
 fi
@@ -100,13 +120,16 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   fi
 fi
 
+ENV_PREFIX=$(printf '%q ' env HAPPY_SERVER_URL="$HAPPY_SERVER_URL")
+
 if [ -n "$SESSION_ID" ]; then
-  CODEX_CMD=$(printf '%q ' happy codex --resume "$SESSION_ID")
-  RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME" "$SESSION_ID")
+  CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex --resume "$SESSION_ID")"
+  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" --model "$MODEL" --effort "$EFFORT" "$SESSION_NAME" "$SESSION_ID"
 else
-  CODEX_CMD=$(printf '%q ' happy codex)
-  RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME")
+  CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex)"
+  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" --model "$MODEL" --effort "$EFFORT" "$SESSION_NAME"
 fi
+RESTORE_CMD="${RESTORE_CMD% }"
 
 if ! tmux new-session -d -s "$TMUX_SESSION" -c "$SESSION_DIR" "$CODEX_CMD"; then
   echo "Error: failed to create tmux session '$TMUX_SESSION'" >&2
@@ -118,6 +141,7 @@ python3 "$REPO_DIR/lib/vscode_restore.py" register-command "$VSCODE_SETTINGS" "$
 echo "New Codex session: $RESTORE_NAME"
 echo "Folder: $SESSION_DIR"
 echo "Model: $MODEL"
+echo "Effort: $EFFORT"
 echo "Runner: happy codex"
 
 emit_vscode_cwd "$SESSION_DIR"
