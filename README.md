@@ -69,13 +69,12 @@ Start or attach to a named Codex session:
 
 ```bash
 codex-session "Workspace"
-codex-session "Workspace" --last
 codex-session "Workspace" <codex-session-id>
 ```
 
 Codex sessions use `~/codex-sessions/<name>` as their fixed working folder and
 tmux session names like `codex-Workspace`, so they do not collide with
-Claude/Happy tabs named `Workspace`.
+Claude/Happy tabs named `Workspace`. The runner is `happy codex`.
 
 Switch saved VS Code restored tabs between normal Happy and VibeProxy:
 
@@ -130,7 +129,8 @@ For Codex:
 VS Code terminal tab "Codex: Workspace"
   -> codex-session "Workspace"
   -> tmux session "codex-Workspace"
-  -> codex --cd ~/codex-sessions/Workspace --model gpt-5.5
+  -> cwd ~/codex-sessions/Workspace
+  -> happy codex
 ```
 
 ## Repository Layout

@@ -44,7 +44,7 @@ extra wrapper layer.
 
 - creates `~/codex-sessions/<name>`
 - starts or attaches to tmux session `codex-<name>`
-- launches Codex with `--cd` pointed at that fixed folder
+- launches `happy codex` with cwd pointed at that fixed folder
 - registers the terminal with VS Code Restore Terminals as `Codex: <name>`
 
 ## Shared Helpers

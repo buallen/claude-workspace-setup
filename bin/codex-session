@@ -14,9 +14,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 [ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
 source "$REPO_DIR/lib/session.sh"
 
-MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.5}"
-SANDBOX="${CODEX_SANDBOX:-danger-full-access}"
-APPROVAL="${CODEX_APPROVAL:-never}"
+MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.4}"
 RESTART="false"
 
 usage() {
@@ -25,15 +23,14 @@ Usage: codex-session [--restart] [--model MODEL] <task-name> [session-id]
 
 Examples:
   codex-session Workspace
-  codex-session Workspace --last
+  codex-session Workspace <codex-session-id>
   codex-session --restart Workspace
   codex-session --model gpt-5.4 Workspace
 
 Defaults:
   folder:  ~/codex-sessions/<task-name>
-  model:   gpt-5.5
-  sandbox: danger-full-access
-  approval: never
+  model:   gpt-5.4
+  runner:  happy codex
 EOF
 }
 
@@ -81,6 +78,18 @@ VSCODE_SETTINGS="${VSCODE_SETTINGS:-$HOME/Library/Application Support/Code/User/
 mkdir -p "$SESSION_DIR"
 echo -ne "\033]0;${RESTORE_NAME}\007"
 
+mkdir -p "$HOME/.codex"
+if [ ! -f "$HOME/.codex/config.toml" ]; then
+  printf 'model = "%s"\n' "$MODEL" > "$HOME/.codex/config.toml"
+elif grep -q '^model = ' "$HOME/.codex/config.toml"; then
+  perl -0pi -e "s/^model = .*/model = \"$MODEL\"/m" "$HOME/.codex/config.toml"
+else
+  tmp_file=$(mktemp)
+  printf 'model = "%s"\n' "$MODEL" > "$tmp_file"
+  cat "$HOME/.codex/config.toml" >> "$tmp_file"
+  mv "$tmp_file" "$HOME/.codex/config.toml"
+fi
+
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   if [ "$RESTART" = "true" ]; then
     tmux kill-session -t "$TMUX_SESSION"
@@ -92,10 +101,10 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
 fi
 
 if [ -n "$SESSION_ID" ]; then
-  CODEX_CMD=$(printf '%q ' codex resume --cd "$SESSION_DIR" --model "$MODEL" --sandbox "$SANDBOX" --ask-for-approval "$APPROVAL" "$SESSION_ID")
+  CODEX_CMD=$(printf '%q ' happy codex --resume "$SESSION_ID")
   RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME" "$SESSION_ID")
 else
-  CODEX_CMD=$(printf '%q ' codex --cd "$SESSION_DIR" --model "$MODEL" --sandbox "$SANDBOX" --ask-for-approval "$APPROVAL")
+  CODEX_CMD=$(printf '%q ' happy codex)
   RESTORE_CMD=$(printf '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME")
 fi
 
@@ -109,6 +118,7 @@ python3 "$REPO_DIR/lib/vscode_restore.py" register-command "$VSCODE_SETTINGS" "$
 echo "New Codex session: $RESTORE_NAME"
 echo "Folder: $SESSION_DIR"
 echo "Model: $MODEL"
+echo "Runner: happy codex"
 
 emit_vscode_cwd "$SESSION_DIR"
 attach_or_switch "$TMUX_SESSION"
