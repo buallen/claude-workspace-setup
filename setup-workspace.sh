@@ -83,11 +83,12 @@ alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
+alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 """
 
 patterns = [
-    r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|end-session)=.*\n)+",
+    r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|session-restore-mode|end-session)=.*\n)+",
     r"\n?# Happy session private mode[^\n]*\n(?:alias happy-session-private=.*\n)+",
     r"\n?# Claude Code via VibeProxy[\s\S]*?alias claude-codex=.*\n",
 ]

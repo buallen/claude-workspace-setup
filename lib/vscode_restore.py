@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -78,6 +79,55 @@ def remove(settings_path, session_name):
     print(f"Removed from VS Code restore list: {session_name}")
 
 
+def list_commands(settings_path):
+    settings = load(settings_path)
+    for terminal in settings.get("restoreTerminals.terminals", []):
+        for split in terminal.get("splitTerminals", []):
+            name = split.get("name", "")
+            command = split.get("commands", [""])[0]
+            print(f"{name}: {command}")
+
+
+def switch_command(command, target):
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+
+    if not parts:
+        return command
+
+    current = parts[0]
+    if target == "vibe" and current == "happy-session":
+        parts[0] = "happy-vibe-session"
+    elif target == "happy" and current == "happy-vibe-session":
+        parts[0] = "happy-session"
+    else:
+        return command
+
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def switch_restore_mode(settings_path, target):
+    settings = load(settings_path)
+    changed = 0
+
+    for terminal in settings.get("restoreTerminals.terminals", []):
+        for split in terminal.get("splitTerminals", []):
+            commands = split.get("commands", [])
+            if not commands:
+                continue
+            new_command = switch_command(commands[0], target)
+            if new_command != commands[0]:
+                commands[0] = new_command
+                changed += 1
+
+    if changed:
+        save(settings_path, settings)
+
+    print(f"Updated {changed} restore command(s) to {target}.")
+
+
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "register" and len(sys.argv) == 6:
@@ -86,10 +136,18 @@ def main():
     elif command == "remove" and len(sys.argv) == 4:
         _, _, settings_path, session_name = sys.argv
         remove(settings_path, session_name)
+    elif command == "list" and len(sys.argv) == 3:
+        _, _, settings_path = sys.argv
+        list_commands(settings_path)
+    elif command == "switch" and len(sys.argv) == 4 and sys.argv[3] in {"happy", "vibe"}:
+        _, _, settings_path, target = sys.argv
+        switch_restore_mode(settings_path, target)
     else:
         print(
             "Usage: vscode_restore.py register <settings> <session-name> <command-name> <session-id>\n"
-            "       vscode_restore.py remove <settings> <session-name>",
+            "       vscode_restore.py remove <settings> <session-name>\n"
+            "       vscode_restore.py list <settings>\n"
+            "       vscode_restore.py switch <settings> happy|vibe",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -34,6 +34,12 @@ extra wrapper layer.
 - kills the tmux session
 - removes the VS Code Restore Terminals entry
 
+`bin/session-restore-mode`
+
+- lists saved VS Code Restore Terminals commands
+- switches saved commands between `happy-session` and `happy-vibe-session`
+- does not affect currently running tmux sessions
+
 ## Shared Helpers
 
 `lib/session.sh` owns shell-level session mechanics:

@@ -65,6 +65,19 @@ End a session and remove it from VS Code restore:
 end-session "GCP"
 ```
 
+Switch saved VS Code restored tabs between normal Happy and VibeProxy:
+
+```bash
+session-restore-mode list
+session-restore-mode vibe
+session-restore-mode happy
+```
+
+`session-restore-mode vibe` rewrites saved Restore Terminals commands from
+`happy-session ...` to `happy-vibe-session ...`. It does not kill or restart
+currently running tmux sessions; it only changes what VS Code will run next time
+it restores terminal tabs.
+
 ## Installed Aliases
 
 `setup-workspace.sh` manages this block in `~/.zshrc`:
@@ -74,6 +87,7 @@ alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
+alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 ```
 
