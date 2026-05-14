@@ -14,7 +14,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 [ -f "$REPO_DIR/config/defaults.env" ] && source "$REPO_DIR/config/defaults.env"
 source "$REPO_DIR/lib/session.sh"
 
-MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.4}"
+MODEL=""
 RESTART="false"
 
 usage() {
@@ -25,11 +25,11 @@ Examples:
   codex-session Workspace
   codex-session Workspace <codex-session-id>
   codex-session --restart Workspace
-  codex-session --model gpt-5.4 Workspace
+  codex-session --model gpt-5.5 Workspace
 
 Defaults:
   folder:  ~/codex-sessions/<task-name>
-  model:   gpt-5.4
+  model:   gpt-5.5
   runner:  happy codex
 EOF
 }
