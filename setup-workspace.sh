@@ -45,6 +45,7 @@ cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INS
 chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
 rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
 ln -sf "$INSTALL_DIR/bin/happy-vibe-session" ~/.local/bin/happy-vibe-session
+ln -sf "$INSTALL_DIR/bin/session-restore-mode" ~/.local/bin/session-restore-mode
 ok "Workspace scripts installed"
 
 # ── Step 3: Configure tmux ───────────────────────────────────────────────────

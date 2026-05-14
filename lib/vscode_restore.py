@@ -88,6 +88,24 @@ def list_commands(settings_path):
             print(f"{name}: {command}")
 
 
+def command_name(value):
+    return Path(value).name
+
+
+def target_command(target):
+    base = Path.home() / ".claude" / "claude-workspace" / "bin"
+    if target == "vibe":
+        return str(base / "happy-vibe-session")
+    return str(base / "claude-session")
+
+
+def first_command_index(parts):
+    for index, part in enumerate(parts):
+        if "=" not in part:
+            return index
+    return 0
+
+
 def switch_command(command, target):
     try:
         parts = shlex.split(command)
@@ -97,11 +115,13 @@ def switch_command(command, target):
     if not parts:
         return command
 
-    current = parts[0]
-    if target == "vibe" and current == "happy-session":
-        parts[0] = "happy-vibe-session"
+    index = first_command_index(parts)
+    current = command_name(parts[index])
+    if target == "vibe" and current in {"happy-session", "claude-session", "happy-vibe-session"}:
+        parts = parts[index:]
+        parts[0] = target_command("vibe")
     elif target == "happy" and current == "happy-vibe-session":
-        parts[0] = "happy-session"
+        parts = ["CLAUDE_LAUNCHER=happy", target_command("happy")] + parts[index + 1:]
     else:
         return command
 
