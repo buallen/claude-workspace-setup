@@ -165,7 +165,10 @@ def switch_command(command, target):
         parts = env_parts + [target_command("vibe")] + args
     elif target == "happy" and current == "happy-vibe-session":
         remainder = [part for part in parts[index + 1:] if part != "--restart"]
-        parts = ["CLAUDE_LAUNCHER=happy"] + env_parts + [target_command("happy")] + remainder
+        if env_parts:
+            parts = ["CLAUDE_LAUNCHER=happy"] + env_parts + [target_command("happy")] + remainder
+        else:
+            parts = ["happy-session"] + remainder
     else:
         return command
 

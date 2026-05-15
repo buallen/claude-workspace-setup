@@ -43,6 +43,7 @@ mkdir -p "$INSTALL_DIR" ~/.claude/hooks ~/.local/bin
 rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/lib" "$INSTALL_DIR/hooks" "$INSTALL_DIR/config"
 cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
+rm -f "$INSTALL_DIR/bin/happy-vibe-session"
 rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
 ln -sf "$INSTALL_DIR/bin/session-restore-mode" ~/.local/bin/session-restore-mode
 ln -sf "$INSTALL_DIR/bin/codex-session" ~/.local/bin/codex-session

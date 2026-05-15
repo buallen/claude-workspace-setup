@@ -124,10 +124,10 @@ ENV_PREFIX=$(printf '%q ' env HAPPY_SERVER_URL="$HAPPY_SERVER_URL")
 
 if [ -n "$SESSION_ID" ]; then
   CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex --resume "$SESSION_ID")"
-  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" --model "$MODEL" --effort "$EFFORT" "$SESSION_NAME" "$SESSION_ID"
+  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME" "$SESSION_ID"
 else
   CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex)"
-  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" --model "$MODEL" --effort "$EFFORT" "$SESSION_NAME"
+  printf -v RESTORE_CMD '%q ' "$REPO_DIR/bin/codex-session" "$SESSION_NAME"
 fi
 RESTORE_CMD="${RESTORE_CMD% }"
 
