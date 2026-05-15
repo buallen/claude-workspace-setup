@@ -43,8 +43,7 @@ mkdir -p "$INSTALL_DIR" ~/.claude/hooks ~/.local/bin
 rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/lib" "$INSTALL_DIR/hooks" "$INSTALL_DIR/config"
 cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
-rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
-ln -sf "$INSTALL_DIR/bin/happy-vibe-session" ~/.local/bin/happy-vibe-session
+rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
 ln -sf "$INSTALL_DIR/bin/session-restore-mode" ~/.local/bin/session-restore-mode
 ln -sf "$INSTALL_DIR/bin/codex-session" ~/.local/bin/codex-session
 ok "Workspace scripts installed"
@@ -84,7 +83,6 @@ managed = """# Claude Code Workspace aliases
 alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-personal ~/.claude/claude-workspace/bin/claude-session'
-alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
 alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
@@ -237,7 +235,6 @@ echo ""
 echo "Reload your shell:    source ~/.zshrc"
 echo ""
 echo "New happy session:    happy-session 'My Task'"
-echo "New VibeProxy session: happy-vibe-session 'My Task'"
 echo "New Codex session:   codex-session 'My Task'"
 echo "New claude session:   claude-session 'My Task'"
 echo "End a session:        end-session 'My Task'"
