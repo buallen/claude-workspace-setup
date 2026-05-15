@@ -25,7 +25,7 @@ print_running_sessions() {
 resolve_session_id() {
   local session_name="$1"
   local session_id="$2"
-  local session_project_dir session_project_key found
+  local session_project_dir session_project_key
 
   [ -n "$session_id" ] || return 0
 
@@ -38,13 +38,7 @@ resolve_session_id() {
     return 0
   fi
 
-  found=$(find "$CLAUDE_CONFIG_DIR/projects" -name "${session_id}.jsonl" -not -path "*/subagents/*" 2>/dev/null | head -1)
-  if [ -n "$found" ]; then
-    ln "$found" "$session_project_dir/${session_id}.jsonl" 2>/dev/null || true
-    printf '%s\n' "$session_id"
-  else
-    echo "Warning: session file for '$session_id' not found - starting fresh session" >&2
-  fi
+  echo "Warning: session file for '$session_id' not found in '$session_project_dir' - not resuming by id" >&2
 }
 
 attach_or_switch() {
