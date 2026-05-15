@@ -40,7 +40,7 @@ extra wrapper layer.
 
 - lists saved VS Code Restore Terminals commands
 - switches saved commands between `happy-session` and `happy-vibe-session`
-- preserves environment prefixes such as `CLAUDE_CONFIG_DIR=~/.claude-private`
+- preserves environment prefixes such as `CLAUDE_CONFIG_DIR=~/.claude-personal`
 - lets `happy-vibe-session` decide whether to attach to an existing VibeProxy
   tmux session or recreate an old/non-Vibe session
 - does not affect currently running tmux sessions

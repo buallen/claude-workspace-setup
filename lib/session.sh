@@ -23,7 +23,7 @@ resolve_session_id() {
 
   [ -n "$session_id" ] || return 0
 
-  session_project_key="$(session_dir "$session_name" | sed 's#/#-#g')"
+  session_project_key="$(session_dir "$session_name" | sed 's#[^A-Za-z0-9_-]#-#g')"
   session_project_dir="$CLAUDE_CONFIG_DIR/projects/${session_project_key}"
   mkdir -p "$session_project_dir"
 

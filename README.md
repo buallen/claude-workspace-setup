@@ -89,7 +89,7 @@ session-restore-mode happy
 already-correct VibeProxy tmux session, and only recreates it when the existing
 tmux session was started with old/non-Vibe settings. Environment-specific
 sessions keep their environment, so a private session with
-`CLAUDE_CONFIG_DIR=~/.claude-private` stays private after switching modes.
+`CLAUDE_CONFIG_DIR=~/.claude-personal` stays private after switching modes.
 
 ## Installed Aliases
 
@@ -98,7 +98,7 @@ sessions keep their environment, so a private session with
 ```zsh
 alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
-alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
+alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-personal ~/.claude/claude-workspace/bin/claude-session'
 alias happy-vibe-session="~/.claude/claude-workspace/bin/happy-vibe-session"
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
 alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
