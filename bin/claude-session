@@ -53,22 +53,36 @@ restore_launcher() {
   printf '%s' "${quoted% }"
 }
 
+session_env_prefix() {
+  local command_parts=(env) quoted
+
+  if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
+    command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  fi
+
+  if [ "${#command_parts[@]}" -gt 1 ]; then
+    printf -v quoted '%q ' "${command_parts[@]}"
+    printf '%s' "$quoted"
+  fi
+}
+
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   SESSION_DIR="$(session_dir "$SESSION_NAME")"
   ensure_session_dir "$SESSION_NAME"
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
+  ENV_PREFIX="$(session_env_prefix)"
 
   if [ "$LAUNCHER" = "happy" ] && [ -n "$RESOLVED_SESSION_ID" ]; then
-    SESSION_CMD="$(printf '%q ' happy --yolo --resume "$RESOLVED_SESSION_ID")"
+    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --resume "$RESOLVED_SESSION_ID")"
     RESTORE_CMD="$(restore_launcher)"
   elif [ "$LAUNCHER" = "happy" ]; then
-    SESSION_CMD="$(printf '%q ' happy --yolo --continue)"
+    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --continue)"
     RESTORE_CMD="$(restore_launcher)"
   elif [ -n "$RESOLVED_SESSION_ID" ]; then
-    SESSION_CMD="$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
+    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
     RESTORE_CMD="$(restore_launcher)"
   else
-    SESSION_CMD="$(printf '%q ' claude --dangerously-skip-permissions --continue)"
+    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --continue)"
     RESTORE_CMD="$(restore_launcher)"
   fi
 
