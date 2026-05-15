@@ -51,9 +51,13 @@ restore_launcher() {
 }
 
 session_env_prefix() {
-  local command_parts=(env) quoted
+  local command_parts=(env) quoted claude_path
   if [ "$LAUNCHER" = "happy" ]; then
     command_parts+=("HAPPY_SERVER_URL=${HAPPY_SERVER_URL:-http://localhost:3005}")
+    claude_path="$(happy_claude_path)"
+    if [ -n "$claude_path" ]; then
+      command_parts+=("HAPPY_CLAUDE_PATH=$claude_path")
+    fi
   fi
   if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
     command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")

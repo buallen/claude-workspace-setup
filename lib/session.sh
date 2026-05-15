@@ -4,6 +4,21 @@ SESSION_ROOT="${SESSION_ROOT:-$HOME/claude-sessions}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR/#\~/$HOME}"
 
+happy_claude_path() {
+  if [ -n "${HAPPY_CLAUDE_PATH:-}" ] && [ -x "$HAPPY_CLAUDE_PATH" ]; then
+    printf '%s\n' "$HAPPY_CLAUDE_PATH"
+    return 0
+  fi
+
+  local nvm_claude="$HOME/.nvm/versions/node/v22.22.0/bin/claude"
+  if [ -x "$nvm_claude" ]; then
+    printf '%s\n' "$nvm_claude"
+    return 0
+  fi
+
+  command -v claude 2>/dev/null || true
+}
+
 session_dir() {
   printf '%s/%s\n' "$SESSION_ROOT" "$1"
 }
