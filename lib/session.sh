@@ -3,8 +3,6 @@
 SESSION_ROOT="${SESSION_ROOT:-$HOME/claude-sessions}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR/#\~/$HOME}"
-CLAUDE_SESSION_PROJECTS_DIR="${CLAUDE_SESSION_PROJECTS_DIR:-}"
-CLAUDE_SESSION_PROJECTS_DIR="${CLAUDE_SESSION_PROJECTS_DIR/#\~/$HOME}"
 
 session_base_env_prefix() {
   local quoted
@@ -20,47 +18,46 @@ session_project_key() {
   session_dir "$1" | sed 's#[^A-Za-z0-9_-]#-#g'
 }
 
-session_project_dir() {
-  local projects_dir="${CLAUDE_SESSION_PROJECTS_DIR:-$CLAUDE_CONFIG_DIR/projects}"
-  printf '%s/%s\n' "$projects_dir" "$(session_project_key "$1")"
-}
-
-runtime_session_project_dir() {
-  printf '%s/projects/%s\n' "$CLAUDE_CONFIG_DIR" "$(session_project_key "$1")"
-}
-
-ensure_session_project_mapping() {
-  local session_name="$1"
-  local target_dir runtime_dir runtime_parent current_target existing_entry
-
-  [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ] || return 0
-  [ "$CLAUDE_SESSION_PROJECTS_DIR" != "$CLAUDE_CONFIG_DIR/projects" ] || return 0
-
-  target_dir="$(session_project_dir "$session_name")"
-  runtime_dir="$(runtime_session_project_dir "$session_name")"
-  runtime_parent="$(dirname "$runtime_dir")"
-
-  mkdir -p "$target_dir" "$runtime_parent"
-
-  if [ -L "$runtime_dir" ]; then
-    current_target="$(readlink "$runtime_dir")"
-    [ "$current_target" = "$target_dir" ] && return 0
-    rm "$runtime_dir"
-  elif [ -e "$runtime_dir" ]; then
-    existing_entry="$(find "$runtime_dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || true)"
-    if [ -n "$existing_entry" ]; then
-      echo "Error: cannot map '$runtime_dir' to '$target_dir' because it is not empty" >&2
-      echo "Move or purge that project state first, then retry." >&2
-      return 1
-    fi
-    rmdir "$runtime_dir"
-  fi
-
-  ln -s "$target_dir" "$runtime_dir"
-}
-
 ensure_session_dir() {
   mkdir -p "$(session_dir "$1")"
+}
+
+cleanup_personal_default_shadow() {
+  local session_name="$1"
+  local shadow_dir entry
+
+  [ "$session_name" = "Personal" ] || return 0
+  [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude-private" ] || return 0
+
+  shadow_dir="$HOME/.claude/projects/$(session_project_key "$session_name")"
+  [ -e "$shadow_dir" ] || return 0
+
+  if [ -L "$shadow_dir" ]; then
+    rm "$shadow_dir"
+    return 0
+  fi
+
+  [ -d "$shadow_dir" ] || return 0
+
+  while IFS= read -r entry; do
+    [ -f "$entry" ] || {
+      echo "Warning: refusing to remove non-file default Personal shadow entry: $entry" >&2
+      return 1
+    }
+    case "$entry" in
+      *.jsonl) ;;
+      *)
+        echo "Warning: refusing to remove non-jsonl default Personal shadow entry: $entry" >&2
+        return 1
+        ;;
+    esac
+    if [ -s "$entry" ] && grep -v '"type":"permission-mode"' "$entry" >/dev/null; then
+      echo "Warning: refusing to remove default Personal shadow with non-permission content: $entry" >&2
+      return 1
+    fi
+  done < <(find "$shadow_dir" -mindepth 1 -maxdepth 1 -print)
+
+  rm -rf "$shadow_dir"
 }
 
 print_running_sessions() {
@@ -70,19 +67,20 @@ print_running_sessions() {
 resolve_session_id() {
   local session_name="$1"
   local session_id="$2"
-  local project_dir
+  local session_project_dir session_project_key
 
   [ -n "$session_id" ] || return 0
 
-  project_dir="$(session_project_dir "$session_name")"
-  mkdir -p "$project_dir"
+  session_project_key="$(session_project_key "$session_name")"
+  session_project_dir="$CLAUDE_CONFIG_DIR/projects/${session_project_key}"
+  mkdir -p "$session_project_dir"
 
-  if [ -f "$project_dir/${session_id}.jsonl" ]; then
+  if [ -f "$session_project_dir/${session_id}.jsonl" ]; then
     printf '%s\n' "$session_id"
     return 0
   fi
 
-  echo "Warning: session file for '$session_id' not found in '$project_dir' - not resuming by id" >&2
+  echo "Warning: session file for '$session_id' not found in '$session_project_dir' - not resuming by id" >&2
 }
 
 attach_or_switch() {

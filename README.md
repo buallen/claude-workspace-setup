@@ -88,9 +88,8 @@ session-restore-mode happy
 `happy-session ...` to `happy-vibe-session ...`. The launcher attaches to an
 already-correct VibeProxy tmux session, and only recreates it when the existing
 tmux session was started with old/non-Vibe settings. Environment-specific
-sessions keep their environment, so a private transcript session with
-`CLAUDE_SESSION_PROJECTS_DIR=~/.claude-private/projects` stays private after
-switching modes while sharing the default Claude account.
+sessions keep their environment, so a private session with
+`CLAUDE_CONFIG_DIR=~/.claude-private` stays private after switching modes.
 
 ## Installed Aliases
 
@@ -99,11 +98,20 @@ switching modes while sharing the default Claude account.
 ```zsh
 alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
-alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_SESSION_PROJECTS_DIR=~/.claude-private/projects ~/.claude/claude-workspace/bin/claude-session'
+alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
 alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 ```
+
+## Personal Private Session
+
+`Personal` is the only session with private Claude state. When
+`happy-session-private Personal ...` starts, `claude-session` first runs
+`claude-auth-sync` to copy the newest Claude Code OAuth credential between the
+default macOS Keychain slot and `~/.claude-private`'s Keychain slot. The token
+is not printed. Transcript files remain strictly separate because the Claude
+process still runs with `CLAUDE_CONFIG_DIR=~/.claude-private`.
 
 ## How It Works
 
@@ -121,7 +129,7 @@ For VibeProxy:
 ```text
 happy-vibe-session "GCP"
   -> tmux session "GCP"
-  -> preserves CLAUDE_SESSION_PROJECTS_DIR when a session uses private transcripts
+  -> preserves CLAUDE_CONFIG_DIR when a session uses a private config
   -> env ANTHROPIC_BASE_URL=http://localhost:8317 ...
   -> happy --yolo --model=gpt-5.5 --effort=max
 ```

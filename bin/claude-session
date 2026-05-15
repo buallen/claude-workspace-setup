@@ -30,10 +30,18 @@ fi
 
 echo -ne "\033]0;${SESSION_NAME}\007"
 
+sync_personal_private_auth() {
+  if [ "$SESSION_NAME" = "Personal" ] && [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude-private" ]; then
+    "$SCRIPT_DIR/claude-auth-sync" --private-config "$CLAUDE_CONFIG_DIR" || {
+      echo "Warning: Claude auth sync failed for Personal; continuing with existing private auth" >&2
+    }
+  fi
+}
+
 restore_launcher() {
   local command_parts=() quoted
 
-  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] && [ -z "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
+  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ]; then
     if [ "$LAUNCHER" = "happy" ]; then
       printf '%s' "happy-session"
       return
@@ -43,22 +51,10 @@ restore_launcher() {
     return
   fi
 
-  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] \
-    && [ "$CLAUDE_SESSION_PROJECTS_DIR" = "$HOME/.claude-private/projects" ] \
-    && [ "$LAUNCHER" = "happy" ]; then
-    printf '%s' "happy-session-private"
-    return
-  fi
-
   if [ "$LAUNCHER" = "happy" ]; then
     command_parts+=("CLAUDE_LAUNCHER=happy")
   fi
-  if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
-    command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
-  fi
-  if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
-    command_parts+=("CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")
-  fi
+  command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
 
   command_parts+=("$SCRIPT_DIR/claude-session")
   printf -v quoted '%q ' "${command_parts[@]}"
@@ -72,17 +68,16 @@ session_env_prefix() {
   if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
     prefix+="$(printf '%q ' "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")"
   fi
-  if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
-    prefix+="$(printf '%q ' "CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")"
-  fi
 
   printf '%s' "$prefix"
 }
 
+sync_personal_private_auth
+
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   SESSION_DIR="$(session_dir "$SESSION_NAME")"
   ensure_session_dir "$SESSION_NAME"
-  ensure_session_project_mapping "$SESSION_NAME"
+  cleanup_personal_default_shadow "$SESSION_NAME" || true
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
   ENV_PREFIX="$(session_env_prefix)"
 
@@ -106,6 +101,10 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   fi
 
   python3 "$REPO_DIR/lib/vscode_restore.py" register "$VSCODE_SETTINGS" "$SESSION_NAME" "$RESTORE_CMD" "$RESOLVED_SESSION_ID"
+  if [ "$SESSION_NAME" = "Personal" ] && [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude-private" ]; then
+    sleep 1
+    cleanup_personal_default_shadow "$SESSION_NAME" || true
+  fi
   echo "New session: $SESSION_NAME"
 else
   echo "Restored session: $SESSION_NAME"

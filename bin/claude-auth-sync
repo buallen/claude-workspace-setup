@@ -1,0 +1,196 @@
+#!/bin/bash
+# Sync Claude Code OAuth credentials between the default config and one private config.
+
+set -euo pipefail
+
+PRIVATE_CONFIG_DIR="${HOME}/.claude-private"
+QUIET="false"
+
+usage() {
+  cat <<'EOF'
+Usage: claude-auth-sync [--private-config DIR] [--quiet]
+
+Syncs the newest Claude Code OAuth credential between the default macOS
+Keychain slot and the private config's Keychain slot. No token is printed.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --private-config)
+      [ "$#" -ge 2 ] || { echo "Missing value for --private-config" >&2; exit 2; }
+      PRIVATE_CONFIG_DIR="${2/#\~/$HOME}"
+      shift 2
+      ;;
+    --quiet)
+      QUIET="true"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+log() {
+  [ "$QUIET" = "true" ] || echo "$@"
+}
+
+service_for_config_dir() {
+  local config_dir="$1"
+  if [ -z "$config_dir" ]; then
+    printf '%s\n' "Claude Code-credentials"
+    return
+  fi
+
+  local hash
+  hash="$(printf '%s' "$config_dir" | shasum -a 256 | awk '{print substr($1, 1, 8)}')"
+  printf 'Claude Code-credentials-%s\n' "$hash"
+}
+
+keychain_mtime() {
+  local service="$1"
+  security find-generic-password -a "$USER" -s "$service" 2>/dev/null \
+    | sed -n 's/.*"mdat".*"\([0-9]\{14\}Z\).*/\1/p' \
+    | head -1
+}
+
+secret_hex() {
+  local service="$1"
+  python3 - "$USER" "$service" <<'PY'
+import subprocess
+import sys
+
+user, service = sys.argv[1], sys.argv[2]
+try:
+    data = subprocess.check_output(
+        ["security", "find-generic-password", "-a", user, "-s", service, "-w"],
+        stderr=subprocess.DEVNULL,
+    )
+except subprocess.CalledProcessError:
+    raise SystemExit(0)
+
+# `security -w` appends a display newline; it is not part of the stored secret.
+if data.endswith(b"\n"):
+    data = data[:-1]
+
+print(data.hex(), end="")
+PY
+}
+
+copy_keychain_secret() {
+  local from_service="$1"
+  local to_service="$2"
+  local hex
+
+  hex="$(secret_hex "$from_service")"
+  [ -n "$hex" ] || return 1
+  security add-generic-password -U -a "$USER" -s "$to_service" -X "$hex" >/dev/null
+}
+
+sync_auth_metadata() {
+  local from_config="$1"
+  local to_config="$2"
+  python3 - "$from_config" "$to_config" <<'PY'
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+from_config = Path(sys.argv[1]).expanduser()
+to_config = Path(sys.argv[2]).expanduser()
+from_file = from_config / ".claude.json"
+to_file = to_config / ".claude.json"
+
+if not from_file.exists():
+    raise SystemExit(0)
+
+try:
+    source = json.loads(from_file.read_text())
+except Exception:
+    raise SystemExit(0)
+
+try:
+    target = json.loads(to_file.read_text()) if to_file.exists() else {}
+except Exception:
+    target = {}
+
+changed = False
+for key in ("oauthAccount", "hasCompletedOnboarding"):
+    if key in source and target.get(key) != source[key]:
+        target[key] = source[key]
+        changed = True
+    elif key not in source and key in target:
+        target.pop(key, None)
+        changed = True
+
+if not changed:
+    raise SystemExit(0)
+
+to_config.mkdir(parents=True, exist_ok=True)
+fd, tmp_name = tempfile.mkstemp(prefix=".claude.json.", suffix=".tmp", dir=to_config)
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(target, fh, indent=2)
+        fh.write("\n")
+    os.chmod(tmp_name, stat.S_IRUSR | stat.S_IWUSR)
+    os.replace(tmp_name, to_file)
+finally:
+    try:
+        os.unlink(tmp_name)
+    except FileNotFoundError:
+        pass
+PY
+}
+
+DEFAULT_CONFIG_DIR="${HOME}/.claude"
+DEFAULT_SERVICE="$(service_for_config_dir "")"
+PRIVATE_SERVICE="$(service_for_config_dir "$PRIVATE_CONFIG_DIR")"
+
+default_mtime="$(keychain_mtime "$DEFAULT_SERVICE")"
+private_mtime="$(keychain_mtime "$PRIVATE_SERVICE")"
+
+if [ -z "$default_mtime" ] && [ -z "$private_mtime" ]; then
+  log "Claude auth sync skipped: no default or private Keychain credential found"
+  exit 0
+fi
+
+if [ -z "$private_mtime" ]; then
+  copy_keychain_secret "$DEFAULT_SERVICE" "$PRIVATE_SERVICE"
+  sync_auth_metadata "$DEFAULT_CONFIG_DIR" "$PRIVATE_CONFIG_DIR"
+  log "Claude auth synced: default -> private"
+  exit 0
+fi
+
+if [ -z "$default_mtime" ]; then
+  copy_keychain_secret "$PRIVATE_SERVICE" "$DEFAULT_SERVICE"
+  sync_auth_metadata "$PRIVATE_CONFIG_DIR" "$DEFAULT_CONFIG_DIR"
+  log "Claude auth synced: private -> default"
+  exit 0
+fi
+
+default_hex="$(secret_hex "$DEFAULT_SERVICE")"
+private_hex="$(secret_hex "$PRIVATE_SERVICE")"
+
+if [ -n "$default_hex" ] && [ "$default_hex" = "$private_hex" ]; then
+  log "Claude auth already synced"
+  exit 0
+fi
+
+if [[ "$private_mtime" > "$default_mtime" ]]; then
+  copy_keychain_secret "$PRIVATE_SERVICE" "$DEFAULT_SERVICE"
+  sync_auth_metadata "$PRIVATE_CONFIG_DIR" "$DEFAULT_CONFIG_DIR"
+  log "Claude auth synced: private -> default"
+else
+  copy_keychain_secret "$DEFAULT_SERVICE" "$PRIVATE_SERVICE"
+  sync_auth_metadata "$DEFAULT_CONFIG_DIR" "$PRIVATE_CONFIG_DIR"
+  log "Claude auth synced: default -> private"
+fi
