@@ -83,7 +83,7 @@ text = path.read_text() if path.exists() else ""
 managed = """# Claude Code Workspace aliases
 alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
-alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
+alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_SESSION_PROJECTS_DIR=~/.claude-private/projects ~/.claude/claude-workspace/bin/claude-session'
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
 alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
@@ -91,6 +91,7 @@ alias end-session="~/.claude/claude-workspace/bin/end-session"
 
 patterns = [
     r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|codex-session|session-restore-mode|end-session)=.*\n)+",
+    r"\n?# Claude private mode[^\n]*\n(?:alias claude-private=.*\n)+",
     r"\n?# Happy session private mode[^\n]*\n(?:alias happy-session-private=.*\n)+",
     r"\n?# Claude Code via VibeProxy[\s\S]*?alias claude-codex=.*\n",
 ]

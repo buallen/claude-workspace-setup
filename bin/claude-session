@@ -33,7 +33,7 @@ echo -ne "\033]0;${SESSION_NAME}\007"
 restore_launcher() {
   local command_parts=() quoted
 
-  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ]; then
+  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] && [ -z "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
     if [ "$LAUNCHER" = "happy" ]; then
       printf '%s' "happy-session"
       return
@@ -43,10 +43,22 @@ restore_launcher() {
     return
   fi
 
+  if [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] \
+    && [ "$CLAUDE_SESSION_PROJECTS_DIR" = "$HOME/.claude-private/projects" ] \
+    && [ "$LAUNCHER" = "happy" ]; then
+    printf '%s' "happy-session-private"
+    return
+  fi
+
   if [ "$LAUNCHER" = "happy" ]; then
     command_parts+=("CLAUDE_LAUNCHER=happy")
   fi
-  command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
+    command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  fi
+  if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
+    command_parts+=("CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")
+  fi
 
   command_parts+=("$SCRIPT_DIR/claude-session")
   printf -v quoted '%q ' "${command_parts[@]}"
@@ -60,6 +72,9 @@ session_env_prefix() {
   if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
     prefix+="$(printf '%q ' "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")"
   fi
+  if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
+    prefix+="$(printf '%q ' "CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")"
+  fi
 
   printf '%s' "$prefix"
 }
@@ -67,6 +82,7 @@ session_env_prefix() {
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   SESSION_DIR="$(session_dir "$SESSION_NAME")"
   ensure_session_dir "$SESSION_NAME"
+  ensure_session_project_mapping "$SESSION_NAME"
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
   ENV_PREFIX="$(session_env_prefix)"
 

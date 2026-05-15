@@ -105,6 +105,7 @@ fi
 
 SESSION_DIR="$(session_dir "$SESSION_NAME")"
 ensure_session_dir "$SESSION_NAME"
+ensure_session_project_mapping "$SESSION_NAME"
 
 session_process_tree() {
   local root_pid="$1"
@@ -138,7 +139,7 @@ session_process_tree() {
 }
 
 session_is_current_vibe() {
-  local pane_pid pane_path process_tree option_config
+  local pane_pid pane_path process_tree option_config option_projects
   pane_pid="$(tmux display-message -p -t "$SESSION_NAME" '#{pane_pid}' 2>/dev/null || true)"
   pane_path="$(tmux display-message -p -t "$SESSION_NAME" '#{pane_current_path}' 2>/dev/null || true)"
   [ -n "$pane_pid" ] || return 1
@@ -156,12 +157,24 @@ session_is_current_vibe() {
   else
     [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude" ] || return 1
   fi
+
+  option_projects="$(tmux show-option -qv -t "$SESSION_NAME" @happy_vibe_projects_dir 2>/dev/null || true)"
+  if [ -n "$option_projects" ]; then
+    [ "$option_projects" = "$CLAUDE_SESSION_PROJECTS_DIR" ] || return 1
+  elif grep -Fq "CLAUDE_SESSION_PROJECTS_DIR=" <<<"$process_tree"; then
+    grep -Fq "CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR" <<<"$process_tree" || return 1
+  else
+    [ -z "$CLAUDE_SESSION_PROJECTS_DIR" ] || return 1
+  fi
 }
 
 restore_command() {
   local command_parts=() quoted
   if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
     command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+  fi
+  if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
+    command_parts+=("CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")
   fi
   command_parts+=("$SCRIPT_DIR/happy-vibe-session" "$SESSION_NAME")
   if [ -n "$RESOLVED_SESSION_ID" ]; then
@@ -189,9 +202,15 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   fi
 fi
 
-ENV_PREFIX="$(session_base_env_prefix)$(printf '%q ' \
+ENV_PREFIX="$(session_base_env_prefix)"
+if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
+  ENV_PREFIX+="$(printf '%q ' "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")"
+fi
+if [ -n "$CLAUDE_SESSION_PROJECTS_DIR" ]; then
+  ENV_PREFIX+="$(printf '%q ' "CLAUDE_SESSION_PROJECTS_DIR=$CLAUDE_SESSION_PROJECTS_DIR")"
+fi
+ENV_PREFIX+="$(printf '%q ' \
   HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}" \
-  CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   ANTHROPIC_BASE_URL="$VIBEPROXY_BASE_URL" \
   ANTHROPIC_AUTH_TOKEN="$VIBEPROXY_API_KEY" \
   ANTHROPIC_API_KEY="" \
@@ -215,6 +234,7 @@ fi
 
 tmux send-keys -t "$SESSION_NAME" "$HAPPY_CMD" Enter
 tmux set-option -q -t "$SESSION_NAME" @happy_vibe_config_dir "$CLAUDE_CONFIG_DIR"
+tmux set-option -q -t "$SESSION_NAME" @happy_vibe_projects_dir "$CLAUDE_SESSION_PROJECTS_DIR"
 tmux set-option -q -t "$SESSION_NAME" @happy_vibe_model "$MODEL"
 tmux set-option -q -t "$SESSION_NAME" @happy_vibe_effort "$EFFORT"
 register_vscode_restore

@@ -151,9 +151,9 @@ def switch_command(command, target):
     env_parts = preserved_env(parts[:index])
     current = command_name(parts[index])
     if current == "happy-session-private" and not any(
-        part.startswith("CLAUDE_CONFIG_DIR=") for part in env_parts
+        part.startswith("CLAUDE_SESSION_PROJECTS_DIR=") for part in env_parts
     ):
-        env_parts.append(f"CLAUDE_CONFIG_DIR={Path.home() / '.claude-private'}")
+        env_parts.append(f"CLAUDE_SESSION_PROJECTS_DIR={Path.home() / '.claude-private' / 'projects'}")
 
     if target == "vibe" and current in {
         "happy-session",
