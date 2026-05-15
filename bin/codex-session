@@ -120,7 +120,7 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   fi
 fi
 
-ENV_PREFIX=$(printf '%q ' env HAPPY_SERVER_URL="$HAPPY_SERVER_URL")
+ENV_PREFIX="$(session_base_env_prefix)$(printf '%q ' HAPPY_SERVER_URL="$HAPPY_SERVER_URL")"
 
 if [ -n "$SESSION_ID" ]; then
   CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex --resume "$SESSION_ID")"

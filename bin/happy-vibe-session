@@ -189,8 +189,7 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   fi
 fi
 
-ENV_PREFIX=$(printf '%q ' \
-  env \
+ENV_PREFIX="$(session_base_env_prefix)$(printf '%q ' \
   HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}" \
   CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
   ANTHROPIC_BASE_URL="$VIBEPROXY_BASE_URL" \
@@ -198,7 +197,7 @@ ENV_PREFIX=$(printf '%q ' \
   ANTHROPIC_API_KEY="" \
   DISABLE_TELEMETRY="true" \
   DISABLE_COST_WARNINGS="true" \
-  API_TIMEOUT_MS="600000")
+  API_TIMEOUT_MS="600000")"
 
 MODEL_ARG="--model=$MODEL"
 EFFORT_ARG="--effort=$EFFORT"

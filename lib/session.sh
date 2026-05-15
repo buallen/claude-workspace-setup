@@ -4,6 +4,12 @@ SESSION_ROOT="${SESSION_ROOT:-$HOME/claude-sessions}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR/#\~/$HOME}"
 
+session_base_env_prefix() {
+  local quoted
+  printf -v quoted '%q ' env -u NO_COLOR COLORTERM="${COLORTERM:-truecolor}"
+  printf '%s' "$quoted"
+}
+
 session_dir() {
   printf '%s/%s\n' "$SESSION_ROOT" "$1"
 }

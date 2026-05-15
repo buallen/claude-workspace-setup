@@ -54,16 +54,14 @@ restore_launcher() {
 }
 
 session_env_prefix() {
-  local command_parts=(env) quoted
+  local prefix
 
+  prefix="$(session_base_env_prefix)"
   if [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
-    command_parts+=("CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+    prefix+="$(printf '%q ' "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")"
   fi
 
-  if [ "${#command_parts[@]}" -gt 1 ]; then
-    printf -v quoted '%q ' "${command_parts[@]}"
-    printf '%s' "$quoted"
-  fi
+  printf '%s' "$prefix"
 }
 
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
