@@ -228,6 +228,52 @@ print("  Stop Hook configured")
 PYTHON
 ok "Stop Hook configured"
 
+# ── Step 11: Install nightly distiller ───────────────────────────────────────
+info "Installing nightly distiller..."
+cp "$REPO_DIR/nightly-distill.sh" ~/.claude/nightly-distill.sh
+cp "$REPO_DIR/distill-read.py" ~/.claude/distill-read.py
+cp "$REPO_DIR/distill-prompt.md" ~/.claude/distill-prompt.md
+cp "$REPO_DIR/registry-init.py" ~/.claude/registry-init.py
+cp "$REPO_DIR/registry-query.py" ~/.claude/registry-query.py
+chmod +x ~/.claude/nightly-distill.sh
+
+# 初始化 registry
+python3 ~/.claude/registry-init.py
+ok "Nightly distiller installed"
+
+# 设置 launchd 每晚 00:25 自动运行
+PLIST="$HOME/Library/LaunchAgents/com.kanlu.distiller.plist"
+if [ ! -f "$PLIST" ]; then
+  NODE_BIN=$(dirname $(which node 2>/dev/null || echo /usr/local/bin/node))
+  cat > "$PLIST" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.kanlu.distiller</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>bash $HOME/.claude/nightly-distill.sh &gt;&gt; $HOME/claude-sessions/distiller.log 2&gt;&amp;1</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>25</integer></dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>$NODE_BIN:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key><string>$HOME</string>
+    </dict>
+    <key>StandardOutPath</key><string>$HOME/claude-sessions/distiller.log</string>
+    <key>StandardErrorPath</key><string>$HOME/claude-sessions/distiller.log</string>
+</dict>
+</plist>
+PLIST_EOF
+  launchctl load "$PLIST" 2>/dev/null && ok "Distiller launchd agent loaded (runs nightly at 00:25)"
+else
+  ok "Distiller launchd agent already configured"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "====================================="
@@ -242,4 +288,8 @@ echo "New claude session:   claude-session 'My Task'"
 echo "End a session:        end-session 'My Task'"
 echo ""
 echo "Or in VS Code: click '+' dropdown → 'Happy Session'"
+echo ""
+echo "Nightly distiller:    runs automatically at 00:25"
+echo "Manual run:           bash ~/.claude/nightly-distill.sh"
+echo "Route a task:         /dispatch 'what you want to do'"
 echo ""
