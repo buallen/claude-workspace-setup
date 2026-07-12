@@ -67,20 +67,50 @@ print_running_sessions() {
 resolve_session_id() {
   local session_name="$1"
   local session_id="$2"
-  local session_project_dir session_project_key
-
-  [ -n "$session_id" ] || return 0
+  local session_project_dir session_project_key found_id candidate f
+  local current_session_file
 
   session_project_key="$(session_project_key "$session_name")"
   session_project_dir="$CLAUDE_CONFIG_DIR/projects/${session_project_key}"
   mkdir -p "$session_project_dir"
+  ensure_session_dir "$session_name"
+  current_session_file="$(session_dir "$session_name")/.current-session"
 
-  if [ -f "$session_project_dir/${session_id}.jsonl" ]; then
+  # If a specific ID was given and the file exists, use it and pin it
+  if [ -n "$session_id" ] && [ -f "$session_project_dir/${session_id}.jsonl" ]; then
     printf '%s\n' "$session_id"
+    printf '%s\n' "$session_id" > "$current_session_file"
     return 0
   fi
 
-  echo "Warning: session file for '$session_id' not found in '$session_project_dir' - not resuming by id" >&2
+  # Check .current-session marker — lets Mac and phone share the same session across reconnects
+  if [ -f "$current_session_file" ]; then
+    candidate="$(tr -d '[:space:]' < "$current_session_file")"
+    if [ -n "$candidate" ] && [ -f "$session_project_dir/${candidate}.jsonl" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  # Find the latest interactive session
+  # Only skip queue-operation: those are definitively background agents started via /go or task queue
+  # file-history-snapshot, ai-title, permission-mode etc. can all appear in interactive sessions
+  found_id=""
+  while IFS= read -r f; do
+    candidate="$(basename "$f" .jsonl)"
+    if head -1 "$f" 2>/dev/null | grep -q '"type":"queue-operation"'; then
+      continue
+    fi
+    found_id="$candidate"
+    break
+  done < <(ls -t "$session_project_dir"/*.jsonl 2>/dev/null)
+
+  if [ -n "$found_id" ]; then
+    [ -n "$session_id" ] && echo "Warning: session '$session_id' not found - using latest interactive: $found_id" >&2
+    printf '%s\n' "$found_id"
+    printf '%s\n' "$found_id" > "$current_session_file"
+    return 0
+  fi
 }
 
 attach_or_switch() {
