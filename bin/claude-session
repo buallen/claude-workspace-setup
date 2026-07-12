@@ -28,7 +28,18 @@ if [ -z "$SESSION_NAME" ]; then
   exit 1
 fi
 
-echo -ne "\033]0;${SESSION_NAME}\007"
+echo -ne "\033]0;${SESSION_NAME} 💤\007"
+
+# Fail-loud guard: a "Personal" session MUST run under ~/.claude-private, else
+# its transcript lands in ~/.claude/projects which the Claudecraft agent scans
+# and uploads. A wrong alias would leak it irreversibly, so refuse to launch.
+enforce_personal_private_config() {
+  if [ "$SESSION_NAME" = "Personal" ] && [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude-private" ]; then
+    echo "Error: 'Personal' session requires CLAUDE_CONFIG_DIR=$HOME/.claude-private (got: $CLAUDE_CONFIG_DIR)" >&2
+    echo "       Use: happy-session-private \"Personal\"" >&2
+    exit 1
+  fi
+}
 
 sync_personal_private_auth() {
   if [ "$SESSION_NAME" = "Personal" ] && [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude-private" ]; then
@@ -72,6 +83,7 @@ session_env_prefix() {
   printf '%s' "$prefix"
 }
 
+enforce_personal_private_config
 sync_personal_private_auth
 
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
@@ -81,11 +93,14 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
   ENV_PREFIX="$(session_env_prefix)"
 
-  if [ "$LAUNCHER" = "happy" ] && [ -n "$RESOLVED_SESSION_ID" ]; then
-    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --resume "$RESOLVED_SESSION_ID")"
+  if [ "$LAUNCHER" = "happy" ] && [ "$SESSION_NAME" != "Personal" ]; then
+    # smart-resume: auto-detects bg-agent lock, forks if needed, retries on quick exit
+    # Quote $SESSION_NAME so names with spaces (e.g. "Beep delivery") reach
+    # smart-resume.sh as a single $1 arg, not word-split into $1/$2.
+    SESSION_CMD="${ENV_PREFIX}bash -c $(printf '%q ' "$SCRIPT_DIR/smart-resume.sh \"$SESSION_NAME\"")"
     RESTORE_CMD="$(restore_launcher)"
   elif [ "$LAUNCHER" = "happy" ]; then
-    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo --continue)"
+    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo)"
     RESTORE_CMD="$(restore_launcher)"
   elif [ -n "$RESOLVED_SESSION_ID" ]; then
     SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
@@ -95,7 +110,7 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     RESTORE_CMD="$(restore_launcher)"
   fi
 
-  if ! tmux new-session -d -s "$SESSION_NAME" -c "$SESSION_DIR" "$SESSION_CMD"; then
+  if ! tmux new-session -d -s "$SESSION_NAME" -n "${SESSION_NAME} 💤" -c "$SESSION_DIR" "$SESSION_CMD"; then
     echo "Error: failed to create tmux session '$SESSION_NAME'" >&2
     exit 1
   fi
