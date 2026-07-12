@@ -27,6 +27,34 @@ def shell_quote_single(value):
     return value.replace("'", "'\\''")
 
 
+SESSION_LAUNCHERS = {
+    "claude-session",
+    "happy-session",
+    "happy-session-private",
+    "happy-vibe-session",
+}
+
+
+def entry_session_name(split):
+    """Derive a split entry's session name from its restore command.
+
+    The name is the first argument after the *-session launcher token, so we no
+    longer need a static ``name`` field — that field would pin the VS Code tab
+    title and block the dynamic "${sequence}" status icon. Falls back to a
+    legacy ``name`` field for entries written by older versions.
+    """
+    commands = split.get("commands") or []
+    if commands:
+        try:
+            parts = shlex.split(commands[0])
+        except ValueError:
+            parts = []
+        for index, part in enumerate(parts):
+            if Path(part).name in SESSION_LAUNCHERS and index + 1 < len(parts):
+                return parts[index + 1]
+    return split.get("name")
+
+
 def register(settings_path, session_name, command_name, session_id=""):
     settings = load(settings_path)
     terminals = settings.get("restoreTerminals.terminals", [])
@@ -40,18 +68,24 @@ def register(settings_path, session_name, command_name, session_id=""):
     existing = None
     for terminal in terminals:
         for split in terminal.get("splitTerminals", []):
-            if split.get("name") == session_name:
+            if entry_session_name(split) == session_name:
                 existing = split
                 break
+        if existing is not None:
+            break
 
     changed = False
     if existing is None:
-        terminals.append({"splitTerminals": [{"name": session_name, "commands": [restore_cmd]}]})
+        terminals.append({"splitTerminals": [{"commands": [restore_cmd]}]})
         settings["restoreTerminals.terminals"] = terminals
         changed = True
-    elif existing.get("commands", [""])[0] != restore_cmd:
-        existing["commands"] = [restore_cmd]
-        changed = True
+    else:
+        if "name" in existing:  # un-pin a legacy entry so its tab shows status
+            del existing["name"]
+            changed = True
+        if existing.get("commands", [""])[0] != restore_cmd:
+            existing["commands"] = [restore_cmd]
+            changed = True
 
     if settings.get("terminal.integrated.tabs.title") != "${sequence}":
         settings["terminal.integrated.tabs.title"] = "${sequence}"
@@ -68,18 +102,24 @@ def register_command(settings_path, restore_name, restore_cmd):
     existing = None
     for terminal in terminals:
         for split in terminal.get("splitTerminals", []):
-            if split.get("name") == restore_name:
+            if entry_session_name(split) == restore_name:
                 existing = split
                 break
+        if existing is not None:
+            break
 
     changed = False
     if existing is None:
-        terminals.append({"splitTerminals": [{"name": restore_name, "commands": [restore_cmd]}]})
+        terminals.append({"splitTerminals": [{"commands": [restore_cmd]}]})
         settings["restoreTerminals.terminals"] = terminals
         changed = True
-    elif existing.get("commands", [""])[0] != restore_cmd:
-        existing["commands"] = [restore_cmd]
-        changed = True
+    else:
+        if "name" in existing:  # un-pin a legacy entry so its tab shows status
+            del existing["name"]
+            changed = True
+        if existing.get("commands", [""])[0] != restore_cmd:
+            existing["commands"] = [restore_cmd]
+            changed = True
 
     if settings.get("terminal.integrated.tabs.title") != "${sequence}":
         settings["terminal.integrated.tabs.title"] = "${sequence}"
@@ -95,7 +135,7 @@ def remove(settings_path, session_name):
     new_terminals = [
         terminal
         for terminal in terminals
-        if not any(split.get("name") == session_name for split in terminal.get("splitTerminals", []))
+        if not any(entry_session_name(split) == session_name for split in terminal.get("splitTerminals", []))
     ]
 
     if len(new_terminals) == len(terminals):
@@ -111,7 +151,7 @@ def list_commands(settings_path):
     settings = load(settings_path)
     for terminal in settings.get("restoreTerminals.terminals", []):
         for split in terminal.get("splitTerminals", []):
-            name = split.get("name", "")
+            name = entry_session_name(split) or ""
             command = split.get("commands", [""])[0]
             print(f"{name}: {command}")
 
