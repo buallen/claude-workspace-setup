@@ -104,6 +104,23 @@ alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 ```
 
+## Otty (optional)
+
+Migrate the same tmux-managed sessions into [Otty](https://otty.sh) — a
+native, GPU-accelerated terminal — instead of (or alongside) VS Code:
+
+```bash
+bin/otty-setup                    # install Otty + font + Claude-styled theme, then migrate
+bin/otty-setup --theme claude-code  # use the dark variant
+bin/otty-setup --skip-font        # keep your existing font
+```
+
+`otty-setup` is idempotent (safe to re-run) and does not touch VS Code or
+`restoreTerminals` — it only installs/configures Otty and opens one Otty tab
+per existing tmux session, attaching to the session already running (or
+started via `happy-session`/`claude-session` above). Re-run `bin/otty-workspace`
+any time to attach newly created sessions without repeating install/config.
+
 ## Personal Private Session
 
 `Personal` is the only session with private Claude state. When
