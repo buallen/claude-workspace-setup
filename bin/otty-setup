@@ -1,0 +1,203 @@
+#!/bin/bash
+# otty-setup — 一键把「VS Code + tmux 管理的终端标签」迁移到 Otty
+#
+# 端到端完成：装 Otty（brew cask）→ 装配套字体 → 写入 Claude 风格主题文件
+# → 配置 Otty（主题/字体/颜色/IPC 权限）→ 调用 otty-workspace 把所有现存
+# tmux session 各开一个 tab attach 进去。
+#
+# 幂等：可重复运行。已装的跳过，已配的跳过，已 attach 的 session 跳过
+# （幂等由 otty-workspace 负责）。
+#
+# 不触碰 VS Code 本身（不改 settings.json / restoreTerminals）——纯增量
+# 迁移，VS Code 原有方式仍可用，确认 Otty 工作正常后再自行停用 VS Code。
+#
+# 用法：
+#   otty-setup                    # 默认浅色 claude-ai 主题
+#   otty-setup --theme claude-code  # 改用深色主题
+#   otty-setup --skip-font        # 不装 CommitMono，只用系统已有字体
+#   otty-setup --force            # 主题文件已存在也强制覆盖（会丢弃你对主题文件的手改）
+#
+# 已知坑（脚本已处理，记录在此供以后维护参考）：
+#   Otty 的 `ipc-allow-send-keys` 会在其他 config set/unset 操作后被静默
+#   弹回 false（疑似刻意的安全设计，防止按键注入权限被永久持久化）——
+#   所以必须把它放在所有 config 操作的最后一步单独设置。
+
+set -uo pipefail
+export PATH="/opt/homebrew/bin:$PATH"
+OTTY=/opt/homebrew/bin/otty
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+THEME="claude-ai"
+FORCE=0
+SKIP_FONT=0
+for arg in "$@"; do
+  case "$arg" in
+    --theme=*) THEME="${arg#--theme=}" ;;
+    --theme) shift_next=1 ;;
+    --force) FORCE=1 ;;
+    --skip-font) SKIP_FONT=1 ;;
+  esac
+done
+# 支持 `--theme claude-code`（空格分隔）写法
+prev=""
+for arg in "$@"; do
+  [ "$prev" = "--theme" ] && THEME="$arg"
+  prev="$arg"
+done
+
+log() { echo "── $1"; }
+
+# ─────────────────────────────────────────────────────────────────────────
+log "1/6 检查 Homebrew"
+if ! command -v brew >/dev/null 2>&1; then
+  echo "未装 Homebrew，请先装：https://brew.sh" >&2
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
+log "2/6 安装 Otty"
+if [ -d /Applications/Otty.app ]; then
+  echo "  已安装 ($(defaults read /Applications/Otty.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null))"
+else
+  brew install --cask otty
+fi
+command -v "$OTTY" >/dev/null 2>&1 || { echo "otty CLI 未就位，安装可能失败" >&2; exit 1; }
+
+# ─────────────────────────────────────────────────────────────────────────
+log "3/6 安装配套字体（CommitMono — 免费字体里最接近 claude.ai 代码字体 Söhne Mono）"
+if [ "$SKIP_FONT" = 1 ]; then
+  echo "  跳过（--skip-font）"
+elif "$OTTY" font --timeout 8000 2>/dev/null | grep -qi "^CommitMono"; then
+  echo "  已安装"
+else
+  brew install --cask font-commit-mono
+fi
+
+# ─────────────────────────────────────────────────────────────────────────
+log "4/6 写入 Claude 风格主题文件"
+THEMES_DIR="$HOME/.config/otty/themes"
+mkdir -p "$THEMES_DIR"
+
+write_theme() {
+  local name="$1" target="$THEMES_DIR/$1.ottytheme"
+  if [ -f "$target" ] && [ "$FORCE" != 1 ]; then
+    echo "  $name.ottytheme 已存在，跳过（--force 可覆盖）"
+    return
+  fi
+  case "$name" in
+    claude-ai) cat > "$target" <<'THEME_EOF'
+# Claude.ai — 高保真浅色主题
+# 取自 claude.ai 实机 CSS 变量（--bg-100/--text-000/--accent-brand 等真实声明值），
+# 而非二手品牌页估色。核心色：cream 底 #faf9f5、正文 #141413、terracotta 招牌橙 #d97757。
+# 浅底 palette 全部走深暖调保证可读（WCAG AA），避开冷蓝（Anthropic 设计取向）。
+
+[terminal]
+foreground = "#141413"
+background = "#faf9f5"
+palette = [
+  "#141413", "#c6613f", "#2f7613", "#875a08",
+  "#356a9d", "#433872", "#327058", "#73726c",
+  "#9c9a92", "#d97757", "#63984e", "#ab8c52",
+  "#3a80c5", "#5645a1", "#3d8f74", "#f5f4ed",
+]
+cursor = "#d97757"
+cursor-text = "#faf9f5"
+selection-background = "#f0eee6"
+selection-foreground = "#141413"
+
+[ui]
+title-bar-bg = "#e8e6dc"
+tab-bar-bg = "#e8e6dc"
+tab-active-bg = "#faf9f5"
+tab-active-fg = "#d97757"
+sidebar-divider = "#dedcd1"
+
+[ghost]
+color = "#a39d90"
+THEME_EOF
+      ;;
+    claude-code) cat > "$target" <<'THEME_EOF'
+# Claude Code — 暖 terracotta 深色主题
+# 复刻 Claude / Anthropic 招牌视觉：暖黑底 + terracotta 橙 accent + 暖米白字。
+# 全暖色 palette，刻意避开冷蓝。核心色：terracotta #da7756、tan #d4a27f、cream #f0eee6
+
+[terminal]
+foreground = "#e8e5da"
+background = "#1f1e1d"
+palette = [
+  "#1f1e1d", "#da7756", "#8ba888", "#d4a27f",
+  "#7f9cb0", "#bb9db5", "#9cb8ab", "#e8e5da",
+  "#4a4744", "#e88d68", "#a6bfa0", "#e0b589",
+  "#9db8cb", "#ccb0c5", "#b3ccbf", "#f0eee6",
+]
+cursor = "#da7756"
+cursor-text = "#1f1e1d"
+selection-background = "#3a3733"
+selection-foreground = "#f0eee6"
+
+[ui]
+title-bar-bg = "#1a1918"
+tab-bar-bg = "#1a1918"
+tab-active-bg = "#2a2826"
+tab-active-fg = "#da7756"
+sidebar-divider = "#3a3733"
+
+[ghost]
+color = "#6b6862"
+THEME_EOF
+      ;;
+    *) echo "  未知主题名 '$name'，跳过写入（仅支持 claude-ai / claude-code）"; return ;;
+  esac
+  echo "  写入 $name.ottytheme"
+}
+write_theme claude-ai
+write_theme claude-code
+
+# ─────────────────────────────────────────────────────────────────────────
+log "5/6 配置 Otty（主题/字体/颜色/权限）"
+# config 子命令直接读写磁盘文件，不需要 app 已在跑。
+"$OTTY" config set theme "$THEME" -q
+
+if [ "$SKIP_FONT" != 1 ]; then
+  "$OTTY" config set font-family "CommitMono" -q
+fi
+
+# 内联颜色覆盖：Otty 有时会把旧颜色内联进 config.toml 盖过 .ottytheme 文件
+# （实测踩过的坑），显式内联当前主题的真值可以确保颜色稳定，不被静默覆盖。
+case "$THEME" in
+  claude-ai)
+    "$OTTY" config set background "#faf9f5" -q
+    "$OTTY" config set foreground "#141413" -q
+    "$OTTY" config set cursor-color "#d97757" -q
+    "$OTTY" config set cursor-text "#faf9f5" -q
+    "$OTTY" config set selection-background "#f0eee6" -q
+    "$OTTY" config set selection-foreground "#141413" -q
+    ;;
+  claude-code)
+    "$OTTY" config set background "#1f1e1d" -q
+    "$OTTY" config set foreground "#e8e5da" -q
+    "$OTTY" config set cursor-color "#da7756" -q
+    "$OTTY" config set cursor-text "#1f1e1d" -q
+    "$OTTY" config set selection-background "#3a3733" -q
+    "$OTTY" config set selection-foreground "#f0eee6" -q
+    ;;
+esac
+
+# 确保 app 在跑，再做需要活实例的收尾操作
+open -a Otty >/dev/null 2>&1
+for i in 1 2 3 4 5; do
+  "$OTTY" window list --timeout 3000 >/dev/null 2>&1 && break
+  sleep 1
+done
+
+# send-keys 权限必须是所有 config 操作里最后一步（否则会被后续操作静默弹回 false）
+"$OTTY" config set ipc-allow-send-keys true -q
+"$OTTY" config reload >/dev/null 2>&1
+echo "  theme=$THEME  send-keys=$("$OTTY" config get ipc-allow-send-keys 2>&1)"
+
+# ─────────────────────────────────────────────────────────────────────────
+log "6/6 迁移 tmux session 到 Otty tab"
+"$SCRIPT_DIR/otty-workspace"
+
+echo ""
+echo "完成。以后新增 session 后随时重跑 otty-workspace 补齐即可。"

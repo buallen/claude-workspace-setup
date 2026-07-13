@@ -1,0 +1,61 @@
+#!/bin/bash
+# otty-workspace — 一键把所有 tmux session 作为 tab attach 到 Otty
+#
+# 每个 tab：起默认 shell → send-keys `tmux attach -t <session>` → attach 现有 tmux session。
+# tab 标题无需手动设：tmux `set-titles on` + `set-titles-string "#W"` 会把窗口名
+# "<会话名> <emoji>"（🔥/🤖/🫵/💤，由 tab-status-poller.py / tab-status.sh 写入）
+# 通过 OSC 2 发给 Otty，Otty 的 privilege-title-shell=true 让 tab 标题自动跟随。
+# → 现有 emoji 状态系统零改动即可复用（迁移自 VS Code restore-terminals）。
+#
+# 幂等：已在 Otty 打开的 session 会跳过，可重复运行。
+# 依赖：Otty config `ipc-allow-send-keys = true`。
+# 注意：这个 flag 会在其他 config set/unset 操作后被 otty 静默弹回 false
+# （疑似刻意的安全设计，防止敏感的按键注入权限被永久持久化）——所以每次
+# 运行都重新显式 set 一次，不能只在初次安装时设过就假设它还留着。
+
+set -uo pipefail
+export PATH="/opt/homebrew/bin:$PATH"
+OTTY=/opt/homebrew/bin/otty
+TMUX=/opt/homebrew/bin/tmux
+
+command -v "$OTTY" >/dev/null || { echo "otty 未安装（brew install --cask otty）"; exit 1; }
+
+# send-keys 权限可能已被静默重置，每次运行前强制重新确认
+"$OTTY" config set ipc-allow-send-keys true -q >/dev/null 2>&1
+"$OTTY" config reload >/dev/null 2>&1
+
+# 确保 app 在跑（CLI 需要 running app + control socket）
+open -a Otty >/dev/null 2>&1
+sleep 2
+
+# mapfile 是 bash 4+；macOS 自带 bash 3.2 没有 → 用 while-read 填数组（portable）
+SESSIONS=()
+while IFS= read -r s; do [ -n "$s" ] && SESSIONS+=("$s"); done \
+  < <("$TMUX" list-sessions -F '#{session_name}' 2>/dev/null)
+[ "${#SESSIONS[@]}" -eq 0 ] && { echo "没有 tmux session，先用 happy-session 启动"; exit 1; }
+
+# pane id 列表 / 已 attach 的 session 名（从 pane.process="<name> <emoji>" 去掉末尾 emoji）
+py_ids='import sys,json;print("\n".join(p["id"] for p in json.load(sys.stdin)["data"]))'
+py_open='import sys,json;print("\n".join(p.get("process","").rsplit(" ",1)[0] for p in json.load(sys.stdin)["data"] if p.get("process","").strip()))'
+
+already="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_open" 2>/dev/null || true)"
+
+opened=0; skipped=0
+for name in "${SESSIONS[@]}"; do
+  if grep -qxF -- "$name" <<<"$already"; then
+    echo "[$name] 已在 Otty，跳过"; skipped=$((skipped+1)); continue
+  fi
+  before="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_ids" 2>/dev/null | sort)"
+  "$OTTY" tab new --cwd "$HOME/claude-sessions/$name" -q >/dev/null 2>&1
+  sleep 0.5
+  after="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_ids" 2>/dev/null | sort)"
+  newpid="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -1)"
+  if [ -z "$newpid" ]; then echo "[$name] 建 tab 失败，跳过"; continue; fi
+  # send-keys 把整行命令逐字输入 pane，再回车。session 名用单引号包住以容纳空格。
+  "$OTTY" pane send-keys --pane "$newpid" "$TMUX attach -t '$name'" key:Enter -q >/dev/null 2>&1
+  echo "[$name] → tab $newpid"; opened=$((opened+1))
+  sleep 0.4
+done
+
+total="$("$OTTY" tab list --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+echo "完成：新开 ${opened} 跳过 ${skipped} 当前 tab 共 ${total}"
