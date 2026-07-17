@@ -1,0 +1,57 @@
+#!/bin/bash
+# session-model — 查看/切换某个 happy session 的 Claude 后端
+#
+#   session-model                     # 列出所有 session 的后端
+#   session-model <name>              # 查看单个 session 的后端
+#   session-model <name> claudex      # 切到 claudex（GPT-5.6 Sol via CLIProxyAPI）
+#   session-model <name> claude       # 切回 Anthropic（默认）
+#
+# 原理：写 ~/claude-sessions/<name>/.backend（内容 "claudex"；文件不存在=Anthropic）。
+# smart-resume.sh 的重连循环每次启动 happy 前读这个文件决定注入哪套 env。
+# Claude Code 的后端地址只在进程启动时读一次，所以切换在「下一次启动」时生效：
+# 在会话里正常退出（exit / Ctrl+D），smart-resume 会立即用新后端 resume 同一对话。
+
+set -uo pipefail
+SESSION_ROOT="$HOME/claude-sessions"
+
+backend_of() {
+  local f="$SESSION_ROOT/$1/.backend"
+  local v
+  v="$(cat "$f" 2>/dev/null | tr -d '[:space:]')"
+  echo "${v:-claude}"
+}
+
+case "$#" in
+  0)
+    for dir in "$SESSION_ROOT"/*/; do
+      name="$(basename "$dir")"
+      [ -f "$dir/.current-session" ] || continue
+      printf '%-24s %s\n' "$name" "$(backend_of "$name")"
+    done
+    ;;
+  1)
+    name="$1"
+    [ -d "$SESSION_ROOT/$name" ] || { echo "session '$name' 不存在" >&2; exit 1; }
+    backend_of "$name"
+    ;;
+  2)
+    name="$1" target="$2"
+    [ -d "$SESSION_ROOT/$name" ] || { echo "session '$name' 不存在" >&2; exit 1; }
+    case "$target" in
+      claudex)
+        echo "claudex" > "$SESSION_ROOT/$name/.backend"
+        echo "[$name] → claudex（GPT-5.6 Sol）。在该会话里退出一次（exit/Ctrl+D），smart-resume 会用新后端续上同一对话。"
+        ;;
+      claude|anthropic)
+        rm -f "$SESSION_ROOT/$name/.backend"
+        echo "[$name] → claude（Anthropic，默认）。在该会话里退出一次即生效。"
+        ;;
+      *)
+        echo "未知后端 '$target'（支持: claudex / claude）" >&2; exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "用法: session-model [<name> [claudex|claude]]" >&2; exit 1
+    ;;
+esac

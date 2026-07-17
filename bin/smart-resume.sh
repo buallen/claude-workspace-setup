@@ -4,12 +4,28 @@
 # Fixes two symptoms of the same root cause (phone→Mac mode switch):
 #   - Scenario A: bg-agent killed mid-task → lock residue → fork to clean UUID
 #   - Scenario B: happy exits to session picker → same lock → fork + resume
+#
+# Backend switching (session-model):
+#   ~/claude-sessions/<name>/.backend == "claudex" routes THIS session's Claude
+#   through CLIProxyAPI (127.0.0.1:8317) to GPT-5.6 Sol, billed to the OpenAI
+#   subscription. Absent file = Anthropic (default). The file is re-read on
+#   every loop iteration, so exiting Claude once inside the session is enough
+#   to relaunch the SAME conversation on the newly selected backend.
 
 SESSION_NAME="$1"
 SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
+CLAUDEX_CONF="/opt/homebrew/etc/cliproxyapi.conf"
+CLAUDEX_URL="http://127.0.0.1:8317"
+CLAUDEX_MODEL="gpt-5.6-sol"
 
 get_uuid() {
   cat "$SESSION_DIR/.current-session" 2>/dev/null
+}
+
+# The proxy key lives only in cliproxyapi.conf (single source of truth).
+claudex_key() {
+  sed -n '/^api-keys:/,/^[a-z]/p' "$CLAUDEX_CONF" 2>/dev/null \
+    | grep -m1 '^[[:space:]]*-' | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
 # A real bg-agent lock = THIS session has a background job that is ACTIVELY
@@ -86,19 +102,53 @@ while true; do
     UUID=$(get_uuid)  # re-read after potential update
   fi
 
+  # Backend selection — re-read every iteration so `session-model <name> claudex`
+  # + one exit inside the session hot-swaps the backend for the same conversation.
+  BACKEND=$(cat "$SESSION_DIR/.backend" 2>/dev/null | tr -d '[:space:]')
+  LAUNCH_ENV=()
+  MODEL_ARGS=()
+  if [ "$BACKEND" = "claudex" ]; then
+    CKEY=$(claudex_key)
+    if [ -n "$CKEY" ] && curl -s -m 2 -o /dev/null "$CLAUDEX_URL/v1/models" 2>/dev/null; then
+      LAUNCH_ENV=(
+        "ANTHROPIC_BASE_URL=$CLAUDEX_URL"
+        "ANTHROPIC_AUTH_TOKEN=$CKEY"
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL=$CLAUDEX_MODEL"
+        "CLAUDE_CODE_SUBAGENT_MODEL=$CLAUDEX_MODEL"
+        "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1"
+        "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY=3"
+        "ENABLE_TOOL_SEARCH=false"
+      )
+      MODEL_ARGS=(--model "$CLAUDEX_MODEL")
+      echo "[smart-resume] backend: claudex ($CLAUDEX_MODEL via CLIProxyAPI)"
+    else
+      echo "[smart-resume] ⚠ backend 'claudex' set but CLIProxyAPI unreachable on $CLAUDEX_URL — falling back to anthropic (brew services start cliproxyapi)"
+    fi
+  fi
+
   START=$(date +%s)
 
   if [ -n "$UUID" ]; then
-    happy --yolo --resume "$UUID"
+    env "${LAUNCH_ENV[@]}" happy --yolo "${MODEL_ARGS[@]}" --resume "$UUID"
   else
-    happy --yolo
+    env "${LAUNCH_ENV[@]}" happy --yolo "${MODEL_ARGS[@]}"
   fi
 
   EXIT_CODE=$?
   ELAPSED=$(( $(date +%s) - START ))
 
-  # If happy ran for more than 10s, assume user exited deliberately → stop
-  [ "$ELAPSED" -ge 10 ] && break
+  # If happy ran for more than 10s, assume user exited deliberately → stop…
+  # …unless the backend marker changed vs what we just ran with: that exit was
+  # a backend hot-swap, so relaunch immediately on the new backend.
+  NEW_BACKEND=$(cat "$SESSION_DIR/.backend" 2>/dev/null | tr -d '[:space:]')
+  if [ "$ELAPSED" -ge 10 ]; then
+    if [ "$NEW_BACKEND" != "$BACKEND" ]; then
+      echo "[smart-resume] backend changed: '${BACKEND:-claude}' → '${NEW_BACKEND:-claude}', relaunching..."
+      RETRIES=0
+      continue
+    fi
+    break
+  fi
 
   # Quick exit (< 10s) = resume failed / went to picker. Retry a bounded number
   # of times, then STOP — an unbounded loop on a persistent failure (e.g. auth
