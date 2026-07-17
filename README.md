@@ -123,7 +123,14 @@ command + one exit" the whole flow. The marker is
 
 Setup for the `claudex` backend (one-time): install CLIProxyAPI, bind it to
 `127.0.0.1:8317`, add an API key, run `cliproxyapi --codex-login`, and start it
-with `brew services start cliproxyapi`.
+with `brew services start cliproxyapi`. Resumed conversations carry their saved
+`claude-*` model name, so also alias those names to the GPT model in
+`cliproxyapi.conf` (`oauth-model-alias.codex`, with `fork: true` to keep the
+GPT name visible).
+
+Caveat: a conversation that has grown near Claude's context limit may not fit
+the GPT model's smaller window — the switch then fails with a context-window
+400. Run `/compact` on the Anthropic backend first, then switch.
 
 ## Personal Private Session
 
