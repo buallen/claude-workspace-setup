@@ -16,7 +16,6 @@ source "$REPO_DIR/lib/session.sh"
 
 MODEL="${CODEX_DEFAULT_MODEL:-gpt-5.5}"
 EFFORT="${CODEX_DEFAULT_EFFORT:-xhigh}"
-HAPPY_SERVER_URL="${HAPPY_SERVER_URL:-http://localhost:3005}"
 RESTART="false"
 
 usage() {
@@ -120,7 +119,12 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   fi
 fi
 
-ENV_PREFIX="$(session_base_env_prefix)$(printf '%q ' HAPPY_SERVER_URL="$HAPPY_SERVER_URL")"
+# Happy connects to its default (official) server; only inject an override when
+# the caller explicitly exported HAPPY_SERVER_URL.
+ENV_PREFIX="$(session_base_env_prefix)"
+if [ -n "${HAPPY_SERVER_URL:-}" ]; then
+  ENV_PREFIX+="$(printf '%q ' HAPPY_SERVER_URL="$HAPPY_SERVER_URL")"
+fi
 
 if [ -n "$SESSION_ID" ]; then
   CODEX_CMD="${ENV_PREFIX}$(printf '%q ' happy codex --resume "$SESSION_ID")"

@@ -31,7 +31,6 @@ SESSION_LAUNCHERS = {
     "claude-session",
     "happy-session",
     "happy-session-private",
-    "happy-vibe-session",
 }
 
 
@@ -156,85 +155,6 @@ def list_commands(settings_path):
             print(f"{name}: {command}")
 
 
-def command_name(value):
-    return Path(value).name
-
-
-def target_command(target):
-    base = Path.home() / ".claude" / "claude-workspace" / "bin"
-    if target == "vibe":
-        return str(base / "happy-vibe-session")
-    return str(base / "claude-session")
-
-
-def first_command_index(parts):
-    for index, part in enumerate(parts):
-        if "=" not in part:
-            return index
-    return 0
-
-
-def preserved_env(parts):
-    return [part for part in parts if not part.startswith("CLAUDE_LAUNCHER=")]
-
-
-def switch_command(command, target):
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return command
-
-    if not parts:
-        return command
-
-    index = first_command_index(parts)
-    env_parts = preserved_env(parts[:index])
-    current = command_name(parts[index])
-    if current == "happy-session-private" and not any(
-        part.startswith("CLAUDE_CONFIG_DIR=") for part in env_parts
-    ):
-        env_parts.append(f"CLAUDE_CONFIG_DIR={Path.home() / '.claude-private'}")
-
-    if target == "vibe" and current in {
-        "happy-session",
-        "happy-session-private",
-        "claude-session",
-        "happy-vibe-session",
-    }:
-        args = [part for part in parts[index + 1:] if part != "--restart"]
-        parts = env_parts + [target_command("vibe")] + args
-    elif target == "happy" and current == "happy-vibe-session":
-        remainder = [part for part in parts[index + 1:] if part != "--restart"]
-        if env_parts:
-            parts = ["CLAUDE_LAUNCHER=happy"] + env_parts + [target_command("happy")] + remainder
-        else:
-            parts = ["happy-session"] + remainder
-    else:
-        return command
-
-    return " ".join(shlex.quote(part) for part in parts)
-
-
-def switch_restore_mode(settings_path, target):
-    settings = load(settings_path)
-    changed = 0
-
-    for terminal in settings.get("restoreTerminals.terminals", []):
-        for split in terminal.get("splitTerminals", []):
-            commands = split.get("commands", [])
-            if not commands:
-                continue
-            new_command = switch_command(commands[0], target)
-            if new_command != commands[0]:
-                commands[0] = new_command
-                changed += 1
-
-    if changed:
-        save(settings_path, settings)
-
-    print(f"Updated {changed} restore command(s) to {target}.")
-
-
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "register" and len(sys.argv) == 6:
@@ -249,16 +169,12 @@ def main():
     elif command == "list" and len(sys.argv) == 3:
         _, _, settings_path = sys.argv
         list_commands(settings_path)
-    elif command == "switch" and len(sys.argv) == 4 and sys.argv[3] in {"happy", "vibe"}:
-        _, _, settings_path, target = sys.argv
-        switch_restore_mode(settings_path, target)
     else:
         print(
             "Usage: vscode_restore.py register <settings> <session-name> <command-name> <session-id>\n"
             "       vscode_restore.py register-command <settings> <restore-name> <restore-command>\n"
             "       vscode_restore.py remove <settings> <session-name>\n"
-            "       vscode_restore.py list <settings>\n"
-            "       vscode_restore.py switch <settings> happy|vibe",
+            "       vscode_restore.py list <settings>",
             file=sys.stderr,
         )
         sys.exit(2)

@@ -44,8 +44,8 @@ rm -rf "$INSTALL_DIR/bin" "$INSTALL_DIR/lib" "$INSTALL_DIR/hooks" "$INSTALL_DIR/
 cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
 rm -f "$INSTALL_DIR/bin/happy-vibe-session"
-rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
-ln -sf "$INSTALL_DIR/bin/session-restore-mode" ~/.local/bin/session-restore-mode
+rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session ~/.local/bin/session-restore-mode ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
+ln -sf "$INSTALL_DIR/bin/session-model" ~/.local/bin/session-model
 ln -sf "$INSTALL_DIR/bin/codex-session" ~/.local/bin/codex-session
 ok "Workspace scripts installed"
 
@@ -85,12 +85,12 @@ alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
-alias session-restore-mode="~/.claude/claude-workspace/bin/session-restore-mode"
+alias session-model="~/.claude/claude-workspace/bin/session-model"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 """
 
 patterns = [
-    r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|codex-session|session-restore-mode|end-session)=.*\n)+",
+    r"\n?# Claude Code Workspace aliases\n(?:alias (?:claude-session|happy-session|happy-session-private|happy-vibe-session|codex-session|session-restore-mode|session-model|end-session)=.*\n)+",
     r"\n?# Claude private mode[^\n]*\n(?:alias claude-private=.*\n)+",
     r"\n?# Happy session private mode[^\n]*\n(?:alias happy-session-private=.*\n)+",
     r"\n?# Claude Code via VibeProxy[\s\S]*?alias claude-codex=.*\n",

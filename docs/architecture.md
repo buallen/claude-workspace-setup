@@ -32,29 +32,30 @@ extra wrapper layer.
 - compares the default and private macOS Keychain Claude Code credential slots
 - copies the newest OAuth credential to the older slot without printing the token
 - syncs non-secret auth metadata in `.claude.json`
-- is invoked by `claude-session` and `happy-vibe-session` only for `Personal`
+- is invoked by `claude-session` only for `Personal`
 
-`bin/happy-vibe-session`
+`bin/smart-resume.sh`
 
-- creates or restarts the tmux session
-- preserves `CLAUDE_CONFIG_DIR`, including private Claude config directories
-- points Claude Code at VibeProxy's Anthropic-compatible API
-- launches Happy with `--model=...` and `--effort=...` so those flags reach Claude Code
-- registers the VS Code Restore Terminals command without `--restart`
+- wraps the `happy --yolo --resume` launch for happy-session tabs
+- detects a live bg-agent lock and forks to a clean UUID before resuming
+- retries bounded times on quick exits (auth failures, broken UUIDs)
+- reads `~/claude-sessions/<name>/.backend` each iteration and, when it says
+  `claudex`, injects the CLIProxyAPI env so the same conversation resumes on
+  GPT-5.6 Sol; relaunches immediately when the marker changes mid-session
+
+`bin/session-model`
+
+- shows or sets a session's Claude backend (`claude` = Anthropic default,
+  `claudex` = GPT-5.6 Sol via a local CLIProxyAPI on 127.0.0.1:8317)
+- writes the `~/claude-sessions/<name>/.backend` marker consumed by
+  `smart-resume.sh`; exiting Claude inside the session applies the switch
+- reads the proxy API key from `/opt/homebrew/etc/cliproxyapi.conf` — the key
+  is never copied anywhere else
 
 `bin/end-session`
 
 - kills the tmux session
 - removes the VS Code Restore Terminals entry
-
-`bin/session-restore-mode`
-
-- lists saved VS Code Restore Terminals commands
-- switches saved commands between `happy-session` and `happy-vibe-session`
-- preserves environment prefixes such as `CLAUDE_CONFIG_DIR=~/.claude-private`
-- lets `happy-vibe-session` decide whether to attach to an existing VibeProxy
-  tmux session or recreate an old/non-Vibe session
-- does not affect currently running tmux sessions
 
 `bin/codex-session`
 
