@@ -34,16 +34,33 @@ while IFS= read -r s; do [ -n "$s" ] && SESSIONS+=("$s"); done \
   < <("$TMUX" list-sessions -F '#{session_name}' 2>/dev/null)
 [ "${#SESSIONS[@]}" -eq 0 ] && { echo "没有 tmux session，先用 happy-session 启动"; exit 1; }
 
-# pane id 列表 / 已 attach 的 session 名（从 pane.process="<name> <emoji>" 去掉末尾 emoji）
+# 三态判定，防止与 Otty 自身的 session 恢复撞车（否则重启后会重复开 tab）：
+#   1) 有 pane 且 process 非空（"<名> <emoji>"）→ 已 attach，跳过
+#   2) 有 pane 但 process 为空（恢复中/attach 断了）→ 复用该 pane，就地 send-keys attach
+#   3) 完全没有 pane → 新建 tab + attach
 py_ids='import sys,json;print("\n".join(p["id"] for p in json.load(sys.stdin)["data"]))'
-py_open='import sys,json;print("\n".join(p.get("process","").rsplit(" ",1)[0] for p in json.load(sys.stdin)["data"] if p.get("process","").strip()))'
+py_panes='import sys,json,os
+for p in json.load(sys.stdin)["data"]:
+    cwd=p.get("cwd","") or ""
+    if "/claude-sessions/" in cwd:
+        pid=p["id"]; proc=(p.get("process") or "").strip()
+        print(os.path.basename(cwd)+"\t"+pid+"\t"+("1" if proc else "0"))'
 
-already="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_open" 2>/dev/null || true)"
+pane_map="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_panes" 2>/dev/null || true)"
 
-opened=0; skipped=0
+opened=0; skipped=0; reused=0
 for name in "${SESSIONS[@]}"; do
-  if grep -qxF -- "$name" <<<"$already"; then
+  row="$(awk -F'\t' -v n="$name" '$1==n{print;exit}' <<<"$pane_map")"
+  state="$(cut -f3 <<<"$row")"
+  pane="$(cut -f2 <<<"$row")"
+  if [ "$state" = "1" ]; then
     echo "[$name] 已在 Otty，跳过"; skipped=$((skipped+1)); continue
+  fi
+  if [ -n "$pane" ]; then
+    # 复用现成 pane（Otty 恢复出的壳），就地 attach
+    "$OTTY" pane send-keys --pane "$pane" "$TMUX attach -t '$name'" key:Enter -q >/dev/null 2>&1
+    echo "[$name] 复用 pane $pane → attach"; reused=$((reused+1))
+    sleep 0.4; continue
   fi
   before="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_ids" 2>/dev/null | sort)"
   "$OTTY" tab new --cwd "$HOME/claude-sessions/$name" -q >/dev/null 2>&1
@@ -58,4 +75,4 @@ for name in "${SESSIONS[@]}"; do
 done
 
 total="$("$OTTY" tab list --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-echo "完成：新开 ${opened} 跳过 ${skipped} 当前 tab 共 ${total}"
+echo "完成：新开 ${opened} 复用 ${reused} 跳过 ${skipped} 当前 tab 共 ${total}"
