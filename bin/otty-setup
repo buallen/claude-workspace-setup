@@ -326,6 +326,7 @@ if [[ -z "$OTTY_NO_AUTO_ATTACH" && "$PWD" == "$HOME/claude-sessions/"* ]]; then
     unset TMUX TMUX_PANE
     _oaa="${PWD#$HOME/claude-sessions/}"; _oaa="${_oaa%%/*}"
     if /opt/homebrew/bin/tmux has-session -t "$_oaa" 2>/dev/null; then
+      print "$(date +%T) pid=$$ ATTACH(zprofile) → $_oaa" >> /tmp/oaa-debug.log
       # 不用 exec：tmux 退出/detach 后回到本 shell 的提示符，otty tab 不关闭
       /opt/homebrew/bin/tmux attach -t "$_oaa"
     fi
