@@ -2,11 +2,11 @@
 # otty-setup — 一键把「VS Code + tmux 管理的终端标签」迁移到 Otty
 #
 # 端到端完成：装 Otty（brew cask）→ 装配套字体 → 写入 Claude 风格主题文件
-# → 配置 Otty（主题/字体/颜色/IPC 权限）→ 调用 otty-workspace 把所有现存
-# tmux session 各开一个 tab attach 进去。
+# → 配置 Otty（主题/字体/颜色/IPC 权限）→ 写入 ~/.zprofile auto-attach 块
+# → 调用 otty-workspace 把所有现存 tmux session 各开一个 tab attach 进去。
 #
 # 幂等：可重复运行。已装的跳过，已配的跳过，已 attach 的 session 跳过
-# （幂等由 otty-workspace 负责）。
+# （幂等由 otty-workspace 负责），~/.zprofile 块用 marker 定位、重复运行只替换不重复插入。
 #
 # 不触碰 VS Code 本身（不改 settings.json / restoreTerminals）——纯增量
 # 迁移，VS Code 原有方式仍可用，确认 Otty 工作正常后再自行停用 VS Code。
@@ -18,9 +18,17 @@
 #   otty-setup --force            # 主题文件已存在也强制覆盖（会丢弃你对主题文件的手改）
 #
 # 已知坑（脚本已处理，记录在此供以后维护参考）：
-#   Otty 的 `ipc-allow-send-keys` 会在其他 config set/unset 操作后被静默
-#   弹回 false（疑似刻意的安全设计，防止按键注入权限被永久持久化）——
-#   所以必须把它放在所有 config 操作的最后一步单独设置。
+#   1. Otty 的 `ipc-allow-send-keys` 会在其他 config set/unset 操作后被静默
+#      弹回 false（疑似刻意的安全设计，防止按键注入权限被永久持久化）——
+#      所以必须把它放在所有 config 操作的最后一步单独设置。
+#   2. auto-attach 逻辑必须放在 ~/.zprofile（login shell 必读），不能放
+#      ~/.zshrc——otty 恢复出的 shell 疑似不会加载 .zshrc。
+#   3. auto-attach 不能用 `exec tmux attach`：tmux 退出/detach 后进程连同
+#      exec 它的 shell 一起终止，otty tab 会被直接关闭；改用普通调用，
+#      detach 后落回这个 shell 的提示符，tab 不消失。
+#   4. 从 tmux 内的 shell `open -a Otty` 会把 TMUX 环境变量继承给新开的
+#      Otty tab，导致 tmux 拒绝"嵌套" attach——auto-attach 块判定「祖父
+#      进程是 Otty」后先 unset TMUX/TMUX_PANE 再 attach。
 
 set -uo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
@@ -48,14 +56,14 @@ done
 log() { echo "── $1"; }
 
 # ─────────────────────────────────────────────────────────────────────────
-log "1/6 检查 Homebrew"
+log "1/7 检查 Homebrew"
 if ! command -v brew >/dev/null 2>&1; then
   echo "未装 Homebrew，请先装：https://brew.sh" >&2
   exit 1
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
-log "2/6 安装 Otty"
+log "2/7 安装 Otty"
 if [ -d /Applications/Otty.app ]; then
   echo "  已安装 ($(defaults read /Applications/Otty.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null))"
 else
@@ -64,7 +72,7 @@ fi
 command -v "$OTTY" >/dev/null 2>&1 || { echo "otty CLI 未就位，安装可能失败" >&2; exit 1; }
 
 # ─────────────────────────────────────────────────────────────────────────
-log "3/6 安装配套字体（CommitMono — 免费字体里最接近 claude.ai 代码字体 Söhne Mono）"
+log "3/7 安装配套字体（CommitMono — 免费字体里最接近 claude.ai 代码字体 Söhne Mono）"
 if [ "$SKIP_FONT" = 1 ]; then
   echo "  跳过（--skip-font）"
 elif "$OTTY" font --timeout 8000 2>/dev/null | grep -qi "^CommitMono"; then
@@ -74,7 +82,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
-log "4/6 写入 Claude 风格主题文件"
+log "4/7 写入 Claude 风格主题文件"
 THEMES_DIR="$HOME/.config/otty/themes"
 mkdir -p "$THEMES_DIR"
 
@@ -86,64 +94,166 @@ write_theme() {
   fi
   case "$name" in
     claude-ai) cat > "$target" <<'THEME_EOF'
-# Claude.ai — 高保真浅色主题
-# 取自 claude.ai 实机 CSS 变量（--bg-100/--text-000/--accent-brand 等真实声明值），
-# 而非二手品牌页估色。核心色：cream 底 #faf9f5、正文 #141413、terracotta 招牌橙 #d97757。
-# 浅底 palette 全部走深暖调保证可读（WCAG AA），避开冷蓝（Anthropic 设计取向）。
+# Claude.ai — 高保真浅色主题（v3，按真实 THEME_SPEC 重写）
+#
+# 颜色来源（v2 三路互证，详见 git 历史）：claude.ai 实机 CSS 变量 + Anthropic
+# 官方 brand-guidelines + Fudge 取色统计，三源重合的核心值：
+#   --bg-100 #faf9f5 主背景 / --bg-300 #f0eee6 次级 surface / --bg-400 #e8e6dc chrome
+#   --text-000 #141413 正文 / --text-400 #73726c 弱化 / #9c9a92 次要
+#   --accent-brand #d97757 招牌 terracotta / --brand-000 #c6613f emphasized clay
+#
+# v3 修正：v1/v2 写的 [ui]/[ghost] 段并不存在于真实 schema（被 Otty 静默忽略，
+# 主题看起来"没生效"）；真实结构是 [meta]/[terminal]/[cursor]/[token]/[panel]/
+# [sidebar]/[tab]/[tab.active]（参照内置 nord.ottytheme 注释版）。
+# tab 文字色：激活 = CC 哑光陶土红 #c6613f（bypass 页脚同款 = 终端 red 位），
+# 非激活 = claude.ai 弱化文字 #73726c。
+
+[meta]
+name        = "claude-ai"
+mode        = "light"
+description = "Claude.ai warm parchment light theme with CC clay accents."
 
 [terminal]
 foreground = "#141413"
 background = "#faf9f5"
+cursor               = "#d97757"
+cursor-text          = "#faf9f5"
+selection-foreground = "#141413"
+selection-background = "#f0eee6"
 palette = [
   "#141413", "#c6613f", "#2f7613", "#875a08",
   "#356a9d", "#433872", "#327058", "#73726c",
   "#9c9a92", "#d97757", "#63984e", "#ab8c52",
   "#3a80c5", "#5645a1", "#3d8f74", "#f5f4ed",
 ]
-cursor = "#d97757"
-cursor-text = "#faf9f5"
-selection-background = "#f0eee6"
-selection-foreground = "#141413"
 
-[ui]
-title-bar-bg = "#e8e6dc"
-tab-bar-bg = "#e8e6dc"
-tab-active-bg = "#faf9f5"
-tab-active-fg = "#d97757"
-sidebar-divider = "#dedcd1"
+[cursor]
+color = "#d97757"
+text  = "#faf9f5"
 
-[ghost]
-color = "#a39d90"
+[token]
+foreground = "#141413"
+secondary  = "#73726c"
+tertiary   = "#9c9a92"
+accent     = "#c6613f"
+success    = "#2f7613"
+warning    = "#875a08"
+danger     = "#c6613f"
+hover-bg   = "rgba(0,0,0,0.04)"
+active-bg  = "rgba(198,97,63,0.14)"
+
+[panel]
+background = "#e8e6dc"
+surface    = "#faf9f5"
+border     = "rgba(0,0,0,0.06)"
+
+[window]
+background = "#e8e6dc"
+
+[titlebar]
+foreground = "#73726c"
+
+[sidebar]
+background   = "#e8e6dc"
+border-right = "1px solid #dedcd1"
+
+[tab]
+background      = "transparent"
+foreground      = "#73726c"
+indicator-color = "#9c9a92"
+
+[tab.hover]
+background = "rgba(0,0,0,0.04)"
+
+[tab.active]
+background      = "#faf9f5"
+foreground      = "#c6613f"
+font-weight     = 500
+indicator-color = "#c6613f"
+
+[tab.active.unfocused]
+background = "#f0eee6"
+foreground = "#a05a42"
+
+[divider]
+color = "#dedcd1"
+width = 1
 THEME_EOF
       ;;
     claude-code) cat > "$target" <<'THEME_EOF'
-# Claude Code — 暖 terracotta 深色主题
+# Claude Code — 暖 terracotta 深色主题（v2，与 claude-ai 同 schema）
 # 复刻 Claude / Anthropic 招牌视觉：暖黑底 + terracotta 橙 accent + 暖米白字。
 # 全暖色 palette，刻意避开冷蓝。核心色：terracotta #da7756、tan #d4a27f、cream #f0eee6
+#
+# schema 同 claude-ai.ottytheme 的 v3 修正（[ui]/[ghost] 不存在于真实 schema，
+# 会被 Otty 静默忽略）：真实结构是 [meta]/[cursor]/[token]/[panel]/[sidebar]/
+# [tab]/[tab.active]。颜色值未变，只是从旧 schema 字段名迁移到新的。
+
+[meta]
+name        = "claude-code"
+mode        = "dark"
+description = "Claude Code warm terracotta dark theme."
 
 [terminal]
 foreground = "#e8e5da"
 background = "#1f1e1d"
+cursor               = "#da7756"
+cursor-text          = "#1f1e1d"
+selection-foreground = "#f0eee6"
+selection-background = "#3a3733"
 palette = [
   "#1f1e1d", "#da7756", "#8ba888", "#d4a27f",
   "#7f9cb0", "#bb9db5", "#9cb8ab", "#e8e5da",
   "#4a4744", "#e88d68", "#a6bfa0", "#e0b589",
   "#9db8cb", "#ccb0c5", "#b3ccbf", "#f0eee6",
 ]
-cursor = "#da7756"
-cursor-text = "#1f1e1d"
-selection-background = "#3a3733"
-selection-foreground = "#f0eee6"
 
-[ui]
-title-bar-bg = "#1a1918"
-tab-bar-bg = "#1a1918"
-tab-active-bg = "#2a2826"
-tab-active-fg = "#da7756"
-sidebar-divider = "#3a3733"
+[cursor]
+color = "#da7756"
+text  = "#1f1e1d"
 
-[ghost]
-color = "#6b6862"
+[token]
+foreground = "#e8e5da"
+secondary  = "#a6a29a"
+tertiary   = "#6b6862"
+accent     = "#da7756"
+
+[panel]
+background = "#1a1918"
+surface    = "#1f1e1d"
+border     = "rgba(255,255,255,0.06)"
+
+[window]
+background = "#1a1918"
+
+[titlebar]
+foreground = "#a6a29a"
+
+[sidebar]
+background   = "#1a1918"
+border-right = "1px solid #3a3733"
+
+[tab]
+background      = "transparent"
+foreground      = "#a6a29a"
+indicator-color = "#6b6862"
+
+[tab.hover]
+background = "rgba(255,255,255,0.04)"
+
+[tab.active]
+background      = "#2a2826"
+foreground      = "#da7756"
+font-weight     = 500
+indicator-color = "#da7756"
+
+[tab.active.unfocused]
+background = "#252321"
+foreground = "#b56a4c"
+
+[divider]
+color = "#3a3733"
+width = 1
 THEME_EOF
       ;;
     *) echo "  未知主题名 '$name'，跳过写入（仅支持 claude-ai / claude-code）"; return ;;
@@ -154,7 +264,7 @@ write_theme claude-ai
 write_theme claude-code
 
 # ─────────────────────────────────────────────────────────────────────────
-log "5/6 配置 Otty（主题/字体/颜色/权限）"
+log "5/7 配置 Otty（主题/字体/颜色/权限）"
 # config 子命令直接读写磁盘文件，不需要 app 已在跑。
 "$OTTY" config set theme "$THEME" -q
 
@@ -196,7 +306,50 @@ done
 echo "  theme=$THEME  send-keys=$("$OTTY" config get ipc-allow-send-keys 2>&1)"
 
 # ─────────────────────────────────────────────────────────────────────────
-log "6/6 迁移 tmux session 到 Otty tab"
+log "6/7 写入 ~/.zprofile auto-attach 块"
+# 幂等：用 >>> ... <<< marker 定位，重复运行只替换块内容，不重复插入。
+# 必须写 .zprofile 不是 .zshrc、必须不 exec、必须先 unset TMUX——见文件头「已知坑」2-4。
+python3 - "$HOME/.zprofile" << 'PYTHON'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1]).expanduser()
+text = path.read_text() if path.exists() else ""
+
+block = '''# >>> otty auto-attach (zprofile 层，login shell 必读；.zshrc 在 otty 恢复的 shell 中疑似不加载) >>>
+if [[ -z "$OTTY_NO_AUTO_ATTACH" && "$PWD" == "$HOME/claude-sessions/"* ]]; then
+  _oaa_gp=$(/bin/ps -o ppid= -p $PPID 2>/dev/null | tr -d ' ')
+  if [[ "$(/bin/ps -o comm= -p ${_oaa_gp:-0} 2>/dev/null)" == *Otty* ]]; then
+    # Otty 若是从 tmux 内的 shell 被 open 启动，会把僵尸 TMUX 环境变量继承给 tab shell，
+    # 必须清掉否则 tmux attach 会拒绝"嵌套"。祖父==Otty 已保证此处不在真 tmux 内。
+    unset TMUX TMUX_PANE
+    _oaa="${PWD#$HOME/claude-sessions/}"; _oaa="${_oaa%%/*}"
+    if /opt/homebrew/bin/tmux has-session -t "$_oaa" 2>/dev/null; then
+      # 不用 exec：tmux 退出/detach 后回到本 shell 的提示符，otty tab 不关闭
+      /opt/homebrew/bin/tmux attach -t "$_oaa"
+    fi
+    unset _oaa
+  fi
+  unset _oaa_gp
+fi
+# <<< otty auto-attach <<<
+'''
+
+pattern = r"\n?# >>> otty auto-attach[\s\S]*?# <<< otty auto-attach <<<\n?"
+if re.search(pattern, text):
+    text = re.sub(pattern, "\n" + block, text)
+    print("  已更新 ~/.zprofile 里的 auto-attach 块")
+else:
+    sep = "\n" if text and not text.endswith("\n\n") else ""
+    text = text.rstrip("\n") + "\n\n" + block if text else block
+    print("  已写入 ~/.zprofile auto-attach 块")
+
+path.write_text(text)
+PYTHON
+
+# ─────────────────────────────────────────────────────────────────────────
+log "7/7 迁移 tmux session 到 Otty tab"
 "$SCRIPT_DIR/otty-workspace"
 
 echo ""

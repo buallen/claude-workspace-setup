@@ -16,7 +16,10 @@
 set -uo pipefail
 export PATH="/opt/homebrew/bin:$PATH"
 OTTY=/opt/homebrew/bin/otty
-TMUX=/opt/homebrew/bin/tmux
+# NOTE: must NOT be named TMUX — that magic env var tells the tmux client which
+# server socket it's inside; clobbering it (exported when run from within tmux)
+# makes every tmux call fail with "no server".
+TMUX_BIN=/opt/homebrew/bin/tmux
 
 command -v "$OTTY" >/dev/null || { echo "otty 未安装（brew install --cask otty）"; exit 1; }
 
@@ -31,34 +34,47 @@ sleep 2
 # mapfile 是 bash 4+；macOS 自带 bash 3.2 没有 → 用 while-read 填数组（portable）
 SESSIONS=()
 while IFS= read -r s; do [ -n "$s" ] && SESSIONS+=("$s"); done \
-  < <("$TMUX" list-sessions -F '#{session_name}' 2>/dev/null)
+  < <("$TMUX_BIN" list-sessions -F '#{session_name}' 2>/dev/null)
 [ "${#SESSIONS[@]}" -eq 0 ] && { echo "没有 tmux session，先用 happy-session 启动"; exit 1; }
 
 # 三态判定，防止与 Otty 自身的 session 恢复撞车（否则重启后会重复开 tab）：
-#   1) 有 pane 且 process 非空（"<名> <emoji>"）→ 已 attach，跳过
-#   2) 有 pane 但 process 为空（恢复中/attach 断了）→ 复用该 pane，就地 send-keys attach
-#   3) 完全没有 pane → 新建 tab + attach
+#   1) tmux session 的 pane 下有活子进程（ground truth，见 tmux_alive）→ 已 attach，跳过
+#   2) 有 otty pane 但 tmux 里没有活子进程（恢复中/attach 断了/空壳 fallback shell）→ 复用该 pane，就地 send-keys attach
+#   3) 完全没有 otty pane → 新建 tab + attach
+#
+# 坑（2026-07-20 实测）：判定"是否已 attach"不能只看 otty pane 的 process 标题字符串——
+# 那个标题由 tab-status-poller 每 15s 轮询更新，claude-session 刚重启完 happy 之后、
+# poller 还没来得及重新打标题的窗口期内，标题仍是旧的空值，会被误判成"未 attach"，
+# 进而把 tmux attach 命令当按键敲进一个已经在正常跑对话的 pane——直接污染成一条离谱的
+# 用户消息。改用 tmux 进程树查活（pane 下有没有子进程）代替标题字符串，零轮询延迟。
+tmux_alive() {
+  local name="$1" pane_pid
+  "$TMUX_BIN" has-session -t "$name" 2>/dev/null || return 1
+  pane_pid="$("$TMUX_BIN" list-panes -t "$name" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  # `pgrep -P` 对不是本脚本自身进程树下的 PID 会静默漏判（2026-07-20 实测），
+  # 用 `ps -eo ppid=` 扫全表匹配代替，对任意 PID 都可靠。
+  [ -n "$pane_pid" ] && ps -eo ppid= | tr -d ' ' | grep -qx "$pane_pid"
+}
+
 py_ids='import sys,json;print("\n".join(p["id"] for p in json.load(sys.stdin)["data"]))'
 py_panes='import sys,json,os
 for p in json.load(sys.stdin)["data"]:
     cwd=p.get("cwd","") or ""
     if "/claude-sessions/" in cwd:
-        pid=p["id"]; proc=(p.get("process") or "").strip()
-        print(os.path.basename(cwd)+"\t"+pid+"\t"+("1" if proc else "0"))'
+        print(os.path.basename(cwd)+"\t"+p["id"])'
 
 pane_map="$("$OTTY" pane list --json 2>/dev/null | python3 -c "$py_panes" 2>/dev/null || true)"
 
 opened=0; skipped=0; reused=0
 for name in "${SESSIONS[@]}"; do
   row="$(awk -F'\t' -v n="$name" '$1==n{print;exit}' <<<"$pane_map")"
-  state="$(cut -f3 <<<"$row")"
   pane="$(cut -f2 <<<"$row")"
-  if [ "$state" = "1" ]; then
+  if tmux_alive "$name"; then
     echo "[$name] 已在 Otty，跳过"; skipped=$((skipped+1)); continue
   fi
   if [ -n "$pane" ]; then
     # 复用现成 pane（Otty 恢复出的壳），就地 attach
-    "$OTTY" pane send-keys --pane "$pane" "$TMUX attach -t '$name'" key:Enter -q >/dev/null 2>&1
+    "$OTTY" pane send-keys --pane "$pane" "$TMUX_BIN attach -t '$name'" key:Enter -q >/dev/null 2>&1
     echo "[$name] 复用 pane $pane → attach"; reused=$((reused+1))
     sleep 0.4; continue
   fi
@@ -69,7 +85,7 @@ for name in "${SESSIONS[@]}"; do
   newpid="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -1)"
   if [ -z "$newpid" ]; then echo "[$name] 建 tab 失败，跳过"; continue; fi
   # send-keys 把整行命令逐字输入 pane，再回车。session 名用单引号包住以容纳空格。
-  "$OTTY" pane send-keys --pane "$newpid" "$TMUX attach -t '$name'" key:Enter -q >/dev/null 2>&1
+  "$OTTY" pane send-keys --pane "$newpid" "$TMUX_BIN attach -t '$name'" key:Enter -q >/dev/null 2>&1
   echo "[$name] → tab $newpid"; opened=$((opened+1))
   sleep 0.4
 done

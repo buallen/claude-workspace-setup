@@ -6,11 +6,24 @@
 #   - Scenario B: happy exits to session picker → same lock → fork + resume
 #
 # Backend switching (session-model):
-#   ~/claude-sessions/<name>/.backend == "claudex" routes THIS session's Claude
-#   through CLIProxyAPI (127.0.0.1:8317) to GPT-5.6 Sol, billed to the OpenAI
-#   subscription. Absent file = Anthropic (default). The file is re-read on
-#   every loop iteration, so exiting Claude once inside the session is enough
-#   to relaunch the SAME conversation on the newly selected backend.
+#   Every session ALWAYS routes through CLIProxyAPI (127.0.0.1:8317) when it's
+#   reachable — real Claude models forward straight through to Anthropic using
+#   a real Anthropic OAuth credential (~/.cli-proxy-api/claude-*.json), GPT
+#   models forward to the codex provider. This is what makes gpt-5.6-sol show
+#   up directly in the in-app /model picker (as a "Custom Haiku model") on
+#   EVERY session, selectable without needing to switch backend first
+#   (2026-07-20; previously the proxy was opt-in per session via .backend).
+#   If the proxy is down, LAUNCH_ENV is left empty and happy falls straight
+#   through to Anthropic directly — a dead local proxy degrades gracefully,
+#   it doesn't take every session down with it.
+#
+#   ~/claude-sessions/<name>/.backend == "claudex" additionally makes
+#   gpt-5.6-sol the PREFERRED default (launch --model + subagent model) for
+#   this session, on top of the always-on proxy routing above. Absent file =
+#   Anthropic's own default model set (Fable/Opus/Sonnet) is preferred, but
+#   gpt-5.6-sol is still there in /model if you want to pick it manually. The
+#   file is re-read every loop iteration, so exiting Claude once inside the
+#   session is enough to relaunch the SAME conversation with the new default.
 
 SESSION_NAME="$1"
 SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
@@ -103,27 +116,33 @@ while true; do
   fi
 
   # Backend selection — re-read every iteration so `session-model <name> claudex`
-  # + one exit inside the session hot-swaps the backend for the same conversation.
+  # + one exit inside the session hot-swaps the default for the same conversation.
   BACKEND=$(cat "$SESSION_DIR/.backend" 2>/dev/null | tr -d '[:space:]')
   LAUNCH_ENV=()
   MODEL_ARGS=()
-  if [ "$BACKEND" = "claudex" ]; then
-    CKEY=$(claudex_key)
-    if [ -n "$CKEY" ] && curl -s -m 2 -o /dev/null "$CLAUDEX_URL/v1/models" 2>/dev/null; then
-      LAUNCH_ENV=(
-        "ANTHROPIC_BASE_URL=$CLAUDEX_URL"
-        "ANTHROPIC_AUTH_TOKEN=$CKEY"
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL=$CLAUDEX_MODEL"
+  CKEY=$(claudex_key)
+  if [ -n "$CKEY" ] && curl -s -m 2 -o /dev/null "$CLAUDEX_URL/v1/models" 2>/dev/null; then
+    # Proxy reachable → always route through it (Claude models forward to real
+    # Anthropic, gpt-5.6-sol forwards to codex) so both are always in /model.
+    LAUNCH_ENV=(
+      "ANTHROPIC_BASE_URL=$CLAUDEX_URL"
+      "ANTHROPIC_AUTH_TOKEN=$CKEY"
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL=$CLAUDEX_MODEL"
+    )
+    if [ "$BACKEND" = "claudex" ]; then
+      LAUNCH_ENV+=(
         "CLAUDE_CODE_SUBAGENT_MODEL=$CLAUDEX_MODEL"
         "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1"
         "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY=3"
         "ENABLE_TOOL_SEARCH=false"
       )
       MODEL_ARGS=(--model "$CLAUDEX_MODEL")
-      echo "[smart-resume] backend: claudex ($CLAUDEX_MODEL via CLIProxyAPI)"
+      echo "[smart-resume] proxy routed, default: $CLAUDEX_MODEL (claudex preferred)"
     else
-      echo "[smart-resume] ⚠ backend 'claudex' set but CLIProxyAPI unreachable on $CLAUDEX_URL — falling back to anthropic (brew services start cliproxyapi)"
+      echo "[smart-resume] proxy routed, default: Anthropic (gpt-5.6-sol also selectable via /model)"
     fi
+  else
+    echo "[smart-resume] ⚠ CLIProxyAPI unreachable on $CLAUDEX_URL — falling back to direct Anthropic, gpt-5.6-sol won't be in /model this launch (brew services start cliproxyapi)"
   fi
 
   START=$(date +%s)

@@ -110,6 +110,10 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     RESTORE_CMD="$(restore_launcher)"
   fi
 
+  # 命令退出（Ctrl-C 退 Claude / smart-resume break）后回落到交互 shell，
+  # 保住 tmux 窗口——否则窗口即 session 一起消失，otty tab 也会被连带关闭。
+  SESSION_CMD+="; exec /bin/zsh -l"
+
   if ! tmux new-session -d -s "$SESSION_NAME" -n "${SESSION_NAME} 💤" -c "$SESSION_DIR" "$SESSION_CMD"; then
     echo "Error: failed to create tmux session '$SESSION_NAME'" >&2
     exit 1
@@ -123,6 +127,28 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   echo "New session: $SESSION_NAME"
 else
   echo "Restored session: $SESSION_NAME"
+  # 窗口可能已回落到 fallback shell（happy/claude 退出后 exec zsh 保住了 tab）。
+  # 此时只 attach 会进到一个空壳 shell——若 pane 无子进程，先自动重新拉起。
+  # 注意：`pgrep -P` 对不在调用者自身进程树下的 PID 会静默漏判（2026-07-20 实测：
+  # 对本 session 自己 fork 出的临时进程能查到，但对其他 tmux pane 的真实活子进程
+  # 查不到，`ps -eo ppid=` 却能看到同一个 PID）——用 ps 查 ppid 列表代替 pgrep -P。
+  PANE_PID="$(tmux list-panes -t "$SESSION_NAME" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  if [ -n "$PANE_PID" ] && ! ps -eo ppid= | tr -d ' ' | grep -qx "$PANE_PID"; then
+    if [ "$LAUNCHER" = "happy" ] && [ "$SESSION_NAME" != "Personal" ]; then
+      tmux send-keys -t "$SESSION_NAME" "$SCRIPT_DIR/smart-resume.sh $(printf '%q' "$SESSION_NAME")" Enter
+    else
+      RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
+      if [ "$LAUNCHER" = "happy" ]; then
+        # Personal：与创建分支一致，不带 --resume（UUID 属 private config，语义不同）
+        tmux send-keys -t "$SESSION_NAME" "happy --yolo" Enter
+      elif [ -n "$RESOLVED_SESSION_ID" ]; then
+        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --resume $RESOLVED_SESSION_ID" Enter
+      else
+        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --continue" Enter
+      fi
+    fi
+    echo "Relaunched agent in idle pane: $SESSION_NAME"
+  fi
 fi
 
 SESSION_DIR="$(session_dir "$SESSION_NAME")"
