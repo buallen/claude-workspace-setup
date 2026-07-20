@@ -228,6 +228,59 @@ print("  Stop Hook configured")
 PYTHON
 ok "Stop Hook configured"
 
+# ── Step 8: Install tab-status emoji/backend marker poller ──────────────────
+info "Installing tab-status poller..."
+mkdir -p ~/.claude/hooks
+cp "$REPO_DIR/tab-status/tab-status-poller.py" "$REPO_DIR/tab-status/tab-status.sh" ~/.claude/hooks/
+chmod +x ~/.claude/hooks/tab-status-poller.py ~/.claude/hooks/tab-status.sh
+
+python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
+import json, sys, os, tempfile
+
+settings_path = sys.argv[1]
+hook_sh = os.path.expanduser("~/.claude/hooks/tab-status.sh")
+
+try:
+    with open(settings_path) as f:
+        settings = json.load(f)
+except (json.JSONDecodeError, FileNotFoundError):
+    settings = {}
+
+hooks = settings.setdefault("hooks", {})
+# event -> arg passed to tab-status.sh (see tab-status.sh for the states it sets)
+wanted = {
+    "UserPromptSubmit": "working",
+    "Stop": "idle",
+    "Notification": "waiting",
+    "SessionStart": "idle",
+}
+
+for event, arg in wanted.items():
+    cmd = f"{hook_sh} {arg}"
+    groups = hooks.setdefault(event, [])
+    # drop any pre-existing tab-status.sh registration for this event (any arg),
+    # so re-running the installer after an arg/path change doesn't leave stale dupes
+    for group in groups:
+        group["hooks"] = [h for h in group.get("hooks", []) if "tab-status.sh" not in h.get("command", "")]
+    groups[:] = [g for g in groups if g.get("hooks")]
+    groups.append({"matcher": "", "hooks": [{"type": "command", "command": cmd}]})
+
+dir_ = os.path.dirname(settings_path)
+with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
+    json.dump(settings, tf, indent=2, ensure_ascii=False)
+    tmp_path = tf.name
+os.replace(tmp_path, settings_path)
+print("  tab-status hooks wired (UserPromptSubmit/Stop/Notification/SessionStart)")
+PYTHON
+
+PLIST="$HOME/Library/LaunchAgents/com.kanlu.tabstatus-poller.plist"
+cp "$REPO_DIR/tab-status/com.kanlu.tabstatus-poller.plist" "$PLIST"
+launchctl bootout "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
+launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+ok "tab-status poller installed and (re)started"
+echo "  依赖 tmux \`set-titles\` 转发（Step 3 已配置）；标签图标需要终端把 tmux 窗口名当标题显示"
+echo "  （Otty: privilege-title-shell=true 默认开；VS Code: Step 5 已设 terminal.integrated.tabs.title）"
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "====================================="
