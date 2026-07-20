@@ -6,14 +6,20 @@ This project installs a small set of shell commands that keep each named AI
 session inside tmux, restore VS Code terminal tabs after restart, and let each
 session pick its Claude backend (Anthropic, or GPT via a local proxy).
 
-## Install
+## Install (one command)
 
 ```bash
-git clone https://github.com/buallen/claude-workspace-setup.git
-cd claude-workspace-setup
-bash setup-workspace.sh
-source ~/.zshrc
+git clone https://github.com/buallen/claude-workspace-setup.git ~/claude-workspace-setup && \
+  bash ~/claude-workspace-setup/setup-workspace.sh && \
+  source ~/.zshrc && \
+  happy-session "Workspace"
 ```
+
+That clones the repo, installs everything, reloads your shell, and drops you
+straight into your first persistent session — nothing left to configure by
+hand. Re-run just the middle line any time to pick up updates
+(`git -C ~/claude-workspace-setup pull && bash ~/claude-workspace-setup/setup-workspace.sh`);
+every step is idempotent.
 
 The installer:
 
@@ -23,6 +29,49 @@ The installer:
 - configures VS Code terminal title + Restore Terminals
 - installs the Claude stop hook for `tasks.md` loops
 - installs the tab-status poller (emoji + backend indicator on every tab)
+
+Optional, after the above: `bash ~/claude-workspace-setup/bin/otty-setup` to
+also (or instead) use [Otty](https://otty.sh) — see [Otty](#otty-optional) below.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A["VS Code / Otty terminal tab"] --> B["shell alias<br/>happy-session · claude-session · codex-session"]
+    B --> C["bin/claude-session"]
+    C -->|"new session"| D["tmux new-session"]
+    C -->|"existing, pane fell back to an idle shell"| E["relaunch smart-resume.sh<br/>(ground truth: ps -eo ppid=, not pgrep -P)"]
+    D --> F
+    E --> F
+
+    F["bin/smart-resume.sh (loop)"] --> G{"bg-agent lock<br/>on this UUID?"}
+    G -->|yes| H["fork to a clean UUID"] --> I
+    G -->|no| I["happy --yolo --resume UUID"]
+
+    J["session-model CLI"] -.->|writes| K[".backend marker"]
+    K -.->|"re-read every loop iteration"| F
+
+    I --> L{"CLIProxyAPI :8317<br/>reachable?"}
+    L -->|no, degrade| M["Anthropic API — direct"]
+    L -->|yes| N["CLIProxyAPI"]
+    N -->|"claude-* models"| M
+    N -->|"gpt-5.6-sol"| O["ChatGPT / Codex"]
+
+    D -.->|"set-titles #W"| P["tmux window title"]
+    E -.-> P
+    P --> A
+
+    Q["tab-status-poller.py<br/>(launchd, every 5s)"] -->|rename-window| P
+    R["tab-status.sh hook<br/>(UserPromptSubmit / Stop / Notification / SessionStart)"] -->|state file| Q
+```
+
+Two paths not shown above to keep it readable: `codex-session` follows the
+same alias → dispatch shape but into `tmux session "codex-Workspace"` running
+`happy codex` (no smart-resume loop, no proxy); `happy-session-private
+"Personal"` runs the same `claude-session` script with
+`CLAUDE_CONFIG_DIR=~/.claude-private`, keeping its transcripts and OAuth
+credential in a separate Keychain slot from every other session. See
+[How It Works](#how-it-works) for both as plain text.
 
 ## Commands
 
