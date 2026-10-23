@@ -56,9 +56,10 @@ resume. Writers:
 
 1. `hooks/session-marker.py` on `SessionStart` (payload: `session_id`,
    `transcript_path`, `cwd`, `source`; the hook's parent is the claude that
-   fired it). It writes only when that claude descends from the happy wrapper
-   in the session's pane (remote mode included), the transcript is in the
-   session's project dir, and the id is not a bg-agent job's. Forks run with
+   fired it). It writes only when that claude is the session's main claude
+   (its parent is the pane's launcher, or the happy wrapper in remote mode;
+   a `claude -p` run from a tool shell does not count), the transcript is in
+   the session's project dir, and the id is not a bg-agent job's. Forks run with
    `SESSION_MARKER_SKIP=1`.
 2. `sessionctl stop` aligns it with happy's log before stopping (same source
    of truth, a safety net).

@@ -87,8 +87,8 @@ it), and only targets exact session names.
 - **One source for "which conversation".** Claude Code fires `SessionStart`
   on startup, resume, `/clear` and `/compact`; `hooks/session-marker.py`
   records the id in `~/claude-sessions/<name>/.current-session`, but only for
-  the Claude that descends from the session pane's happy wrapper (not forks,
-  bg-agent jobs or a one-off `claude -p` in the same directory). Everything
+  the session's main Claude, whose parent is the pane's launcher or happy
+  wrapper (not forks, bg-agent jobs or a one-off `claude -p`). Everything
   else reads the marker through `lib/sessionlib.py`.
 - **No auto-sleep.** A stopped session can be resumed from the phone, but
   that starts a headless process outside tmux, and messages sent while it was
