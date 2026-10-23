@@ -263,6 +263,52 @@ if [ "$(state_get last_chrome_clone_prune)" != "$TODAY" ]; then
   log "chrome clone prune: avail ${before_g}G -> ${after_g}G"
 fi
 
+# ── 每日一次：Otty state.db 备份（保留 7 份）────────────────────
+# Otty 的标签顺序只存在这里。2026-10-15 误杀把窗口全关了，标签顺序再也找不回来。
+# 库在用（WAL 模式），用 sqlite3 .backup 取一致的快照，不要直接 cp。
+OTTY_DB="$HOME/Library/Application Support/io.appmakes.otty/state.db"
+if [ -f "$OTTY_DB" ] && [ "$(state_get last_otty_backup)" != "$TODAY" ]; then
+  state_set last_otty_backup "$TODAY"
+  otty_bak="$HOME/.claude/backups/otty"
+  mkdir -p "$otty_bak"
+  if /usr/bin/sqlite3 "$OTTY_DB" ".backup '$otty_bak/state-$TODAY.db'" 2>>"$LOG_FILE"; then
+    ls -t "$otty_bak"/state-*.db 2>/dev/null | tail -n +8 | while IFS= read -r old; do rm -f "$old"; done
+    log "otty state.db backed up"
+  fi
+fi
+
+# ── 每日一次：长时间空闲会话提醒（只提醒，不自动停）──────────
+# 自动休眠被否决：手机「恢复」已停的会话会起一个不在 tmux 里的无终端进程，
+# 停机期间手机发的消息恢复时会被跳过。所以只列出来，由人决定。
+SESSIONCTL="$HOME/.claude/claude-workspace/bin/sessionctl"
+if [ -x "$SESSIONCTL" ] && [ "$(date +%H)" -ge 9 ] && [ "$(state_get last_idle_report)" != "$TODAY" ]; then
+  state_set last_idle_report "$TODAY"
+  idle_list=$("$SESSIONCTL" idle --hours 24 2>/dev/null | awk -F'\t' '{printf "• %s（%s，%s）\n", $1, $2, $3}')
+  if [ -n "$idle_list" ]; then
+    notify "💤 空闲超过 24 小时的会话（每个常驻约 0.5–1G 内存）：
+${idle_list}
+不用了可以 sessionctl stop \"<名字>\"，要用时 happy-session \"<名字>\" 续接原对话。"
+    log "idle report: $(echo "$idle_list" | wc -l | tr -d ' ') session(s)"
+  fi
+fi
+
+# ── 每日一次：happy 增量扫描补丁巡检 ──────────────────────────
+# 补丁（ops/patch-happy-scanner-incremental.py，上游 PR slopus/happy#1915）会被
+# `npm i -g happy` 覆盖。只在「还是原版整文件读取、且没有补丁标记」时告警，
+# 这样上游修好发版后（代码已变）不会误报。
+if [ "$(state_get last_happy_patch_check)" != "$TODAY" ]; then
+  state_set last_happy_patch_check "$TODAY"
+  for dist in "$HOME"/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.mjs; do
+    [ -f "$dist" ] || continue
+    if grep -q 'file = await readFile(expectedSessionFile, "utf-8")' "$dist" && ! grep -q '__scanCursors' "$dist"; then
+      notify "⚠️ happy 的增量扫描补丁不在了（$(basename "$dist")，多半是升级过 happy）。
+跑 python3 ~/bin/patch-happy-scanner-incremental.py，再逐个 sessionctl restart。
+不补的话每个会话每 3 秒整文件重读对话记录，常年多吃几百 MB 和 20–50% CPU。"
+      log "happy scanner patch missing in $dist"
+    fi
+  done
+fi
+
 # ── 每日一次：backups 保留期清理 ──────────────────────────────
 # 本脚本每小时跑，用状态文件保证 prune 一天只跑一次。
 if [ "$(state_get last_backup_prune)" != "$TODAY" ]; then
