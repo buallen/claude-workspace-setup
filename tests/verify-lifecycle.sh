@@ -57,6 +57,7 @@ mkdir -p "$PROJ"
 echo '{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-01-01T00:00:00Z"}' > "$PROJ/$UUID.jsonl"
 touch -t 202601010000 "$PROJ/$UUID.jsonl"   # an old transcript: fresh writes count as "busy"
 echo "$UUID" > "$SD/.current-session"
+export FAKE_SESSION_HOOK="$REPO/hooks/session-marker.py" FAKE_PROJECT_DIR="$PROJ"
 tm new-session -d -s "$NAME" -c "$SD" "/bin/zsh -f"
 sleep 1
 
@@ -75,6 +76,17 @@ check "second start is a no-op (still one happy)" '[ $rc -eq 0 ] && [ "$(count "
 # 3. status reports the live conversation from happy's log
 st="$("${SC[@]}" status "$NAME" --json)"
 check "status: conversation $UUID from happy" 'echo "$st" | python3 -c "import json,sys; r=json.load(sys.stdin)[0]; sys.exit(0 if r[\"conversation\"]==\"$UUID\" and r[\"conversation_source\"]==\"happy\" else 1)"'
+
+# 3b. SessionStart hook: the marker follows the main conversation only
+sleep 1
+check "hook: marker stays on the resumed conversation" '[ "$(cat "$SD/.current-session")" = "$UUID" ]'
+cpid="$(ps -axo pid=,command= | awk -v t="$T/" 'index($0,t) && /claude\/claude.exe/ && !/awk/ {print $1}')"
+kill -USR1 "$cpid"; sleep 3
+NEW="$(cat "$SD/.current-session")"
+check "hook: /clear moves the marker to the new conversation" '[ "$NEW" != "$UUID" ] && [ -f "$PROJ/$NEW.jsonl" ]'
+(cd "$SD" && node "$FAKE/claude/claude.exe" -p x </dev/null >/dev/null 2>&1)
+check "hook: a one-shot claude -p in the session dir leaves the marker alone" '[ "$(cat "$SD/.current-session")" = "$NEW" ]'
+touch -t 202601010000 "$PROJ/$NEW.jsonl"   # age it, or the session counts as busy for 3 min
 
 # 4. exact names only: "Test" must not prefix-match "Test Sess"
 "${SC[@]}" stop "Test" >/dev/null; rc=$?
@@ -120,7 +132,7 @@ wait $holder
 old_claude="$(ps -axo pid=,command= | awk -v t="$T/" 'index($0,t) && /claude\/claude.exe/ && !/awk/ {print $1}')"
 "${SC[@]}" restart "$NAME" >/dev/null; rc=$?
 new_claude="$(ps -axo pid=,command= | awk -v t="$T/" 'index($0,t) && /claude\/claude.exe/ && !/awk/ {print $1}')"
-check "restart returns 0 with a new claude on the same conversation" '[ $rc -eq 0 ] && [ -n "$new_claude" ] && [ "$new_claude" != "$old_claude" ] && [ "$(count "claude.exe --resume $UUID")" = 1 ]'
+check "restart returns 0, new claude, resumes the post-/clear conversation" '[ $rc -eq 0 ] && [ -n "$new_claude" ] && [ "$new_claude" != "$old_claude" ] && [ "$(count "claude.exe --resume $NEW")" = 1 ]'
 
 # 10. idle report: the transcript was last written on 2026-01-01
 "${SC[@]}" idle --hours 24 --json | python3 -c "import json,sys; sys.exit(0 if [r['name'] for r in json.load(sys.stdin)]==['$NAME'] else 1)"; rc=$?

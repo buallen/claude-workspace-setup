@@ -4,9 +4,28 @@
 //    2026-10-23 "Support" failure.
 //  - Puts the terminal in raw mode and does not restore it when killed.
 //  - With $HOME/busy-flag present it runs a tool command (zsh -c) like the Bash tool.
-const { execSync, spawn } = require('node:child_process');
+const { execSync, spawn, spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+
+// SessionStart hook, called the way Claude Code calls it: hook's parent = us.
+function fireSessionStart(id, source) {
+  const hook = process.env.FAKE_SESSION_HOOK;
+  if (!hook) return;
+  const payload = JSON.stringify({
+    session_id: id, cwd: process.cwd(), hook_event_name: 'SessionStart', source,
+    transcript_path: path.join(process.env.FAKE_PROJECT_DIR || '/nonexistent', id + '.jsonl'),
+  });
+  spawnSync('python3', [hook], { input: payload });
+}
+const args = process.argv.slice(2);
+const r = args.indexOf('--resume');
+let conversation = r >= 0 ? args[r + 1] : crypto.randomUUID();
+if (args.includes('-p')) {  // a one-shot `claude -p` in the session directory
+  fireSessionStart(crypto.randomUUID(), 'startup');
+  process.exit(0);
+}
 let mode = '';
 try { mode = execSync('stty -a', { stdio: ['inherit', 'pipe', 'ignore'] }).toString(); } catch {}
 if (/-icrnl/.test(mode) && /-isig/.test(mode)) {
@@ -19,5 +38,21 @@ if (fs.existsSync(path.join(process.env.HOME, 'busy-flag'))) {
   // command would make zsh exec it and the `zsh -c` process would vanish.
   spawn('/bin/zsh', ['-c', 'sleep 600; true'], { stdio: 'ignore' });
 }
+fireSessionStart(conversation, r >= 0 ? 'resume' : 'startup');
+// SIGUSR1 = the user typed /clear: new conversation id. Real happy learns it
+// through its own hook and logs it; the fake wrapper can't, so log it for it.
+process.on('SIGUSR1', () => {
+  conversation = crypto.randomUUID();
+  fs.writeFileSync(path.join(process.env.FAKE_PROJECT_DIR, conversation + '.jsonl'),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'after clear' } }) + '\n');
+  const wrapper = execSync(`ps -o ppid= -p ${process.ppid}`).toString().trim();
+  for (const f of fs.readdirSync(path.join(process.env.HOME, '.happy', 'logs'))) {
+    if (f.endsWith(`-pid-${wrapper}.log`)) {
+      fs.appendFileSync(path.join(process.env.HOME, '.happy', 'logs', f),
+        `[00:00:01.000] [SESSION_SCANNER] New session: ${conversation}\n`);
+    }
+  }
+  fireSessionStart(conversation, 'clear');
+});
 process.on('SIGTERM', () => process.exit(143));
 setInterval(() => {}, 1000);

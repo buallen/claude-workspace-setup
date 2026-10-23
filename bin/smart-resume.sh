@@ -41,27 +41,13 @@ LIB_DIR="$(cd -P "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib" && pwd
 # and replace spaces only, unlike Claude Code, which replaces every non [A-Za-z0-9-]).
 PROJ_DIR="$(python3 "$LIB_DIR/sessionlib.py" project-dir "$SESSION_NAME")"
 
-# .current-session can outlive its transcript: cleanupPeriodDays (14) purges old
-# JSONLs, and `--resume <purged uuid>` fails with "No conversation found" on
-# every retry. Only return a uuid whose JSONL still exists; otherwise fall back
-# to the newest surviving JSONL (and record it), or nothing → fresh session.
+# Read-only. The SessionStart hook (hooks/session-marker.py) is the writer of
+# .current-session. Returns the marked conversation if its transcript still
+# exists (cleanupPeriodDays purges old ones, and `--resume <purged>` fails on
+# every retry), else the newest transcript with a real turn that is not a
+# bg-agent job, else nothing -> fresh session.
 get_uuid() {
-  local uuid newest
-  uuid=$(cat "$SESSION_DIR/.current-session" 2>/dev/null)
-  if [ -n "$uuid" ] && [ -f "$PROJ_DIR/$uuid.jsonl" ]; then
-    echo "$uuid"
-    return
-  fi
-  newest=$(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null | head -1)
-  if [ -n "$newest" ]; then
-    newest=$(basename "$newest" .jsonl)
-    echo "[smart-resume] stale uuid ${uuid:-<none>}, using newest transcript $newest" >&2
-    echo "$newest" > "$SESSION_DIR/.current-session"
-    echo "$newest"
-  elif [ -n "$uuid" ]; then
-    echo "[smart-resume] transcript for $uuid was purged, starting a fresh session" >&2
-    rm -f "$SESSION_DIR/.current-session"
-  fi
+  python3 "$LIB_DIR/sessionlib.py" resume-target "$SESSION_NAME"
 }
 
 # A real bg-agent lock = THIS session has a background job that is ACTIVELY
@@ -98,32 +84,23 @@ sys.exit(1)
 PY
 }
 
-fork_and_update() {
-  local uuid="$1"
-  local proj_dir
-
-  # Build projects dir path. Claude Code encodes spaces in the cwd as dashes
-  # (e.g. "Beep delivery" -> "Beep-delivery"), so convert them or the newest-
-  # JSONL lookup below silently misses the fork for spaced session names.
-  proj_dir="$HOME/.claude/projects/-Users-kan-lu-claude-sessions-${SESSION_NAME// /-}"
-
-  echo "[smart-resume] bg-agent lock on $uuid — forking..."
-  cd "$SESSION_DIR" || return 1
-
-  # Fork: brief non-interactive run creates a new child JSONL
-  claude --resume "$uuid" --fork-session --dangerously-skip-permissions \
-    --print "." > /tmp/smart-resume-fork.log 2>&1
-
-  # Newest JSONL in the projects dir = forked session
-  local new_uuid
-  new_uuid=$(ls -t "$proj_dir"/*.jsonl 2>/dev/null \
-    | head -1 | xargs -I{} basename {} .jsonl 2>/dev/null)
-
+# Fork past a bg-agent lock and print the conversation to resume. The fork's
+# id comes from the fork itself (--output-format json), not from "newest
+# transcript", which a concurrent bg job can win. SESSION_MARKER_SKIP keeps this
+# throwaway --print run from moving the marker; the hook records the fork once
+# happy resumes it.
+fork_session() {
+  local uuid="$1" new_uuid
+  echo "[smart-resume] bg-agent lock on $uuid — forking..." >&2
+  new_uuid=$(cd "$SESSION_DIR" && SESSION_MARKER_SKIP=1 claude --resume "$uuid" --fork-session \
+      --dangerously-skip-permissions --print "." --output-format json 2>/tmp/smart-resume-fork.log \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("session_id", ""))' 2>/dev/null)
   if [ -n "$new_uuid" ] && [ "$new_uuid" != "$uuid" ]; then
-    echo "$new_uuid" > "$SESSION_DIR/.current-session"
-    echo "[smart-resume] forked → $new_uuid"
+    echo "[smart-resume] forked → $new_uuid" >&2
+    echo "$new_uuid"
   else
-    echo "[smart-resume] fork produced no new UUID, continuing with $uuid"
+    echo "[smart-resume] fork produced no new UUID, continuing with $uuid" >&2
+    echo "$uuid"
   fi
 }
 
@@ -134,8 +111,7 @@ while true; do
   UUID=$(get_uuid)
 
   if [ -n "$UUID" ] && has_active_bg_lock; then
-    fork_and_update "$UUID"
-    UUID=$(get_uuid)  # re-read after potential update
+    UUID=$(fork_session "$UUID")
   fi
 
   # The pane's fallback shell may have INHERITED ANTHROPIC_* from an older

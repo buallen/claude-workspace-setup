@@ -67,8 +67,7 @@ print_running_sessions() {
 resolve_session_id() {
   local session_name="$1"
   local session_id="$2"
-  local session_project_dir session_project_key found_id candidate f
-  local current_session_file
+  local found_id
 
   if [ "$session_name" = "Personal" ]; then
     CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" SESSION_ROOT="$SESSION_ROOT" \
@@ -76,45 +75,21 @@ resolve_session_id() {
     return $?
   fi
 
-  session_project_key="$(session_project_key "$session_name")"
-  session_project_dir="$CLAUDE_CONFIG_DIR/projects/${session_project_key}"
-  mkdir -p "$session_project_dir"
   ensure_session_dir "$session_name"
-  current_session_file="$(session_dir "$session_name")/.current-session"
+  local lib_dir project
+  lib_dir="$(dirname "${BASH_SOURCE[0]}")"
+  project="$(python3 "$lib_dir/sessionlib.py" project-dir "$session_name")"
 
-  # If a specific ID was given and the file exists, use it and pin it
-  if [ -n "$session_id" ] && [ -f "$session_project_dir/${session_id}.jsonl" ]; then
+  # Read-only: the SessionStart hook (hooks/session-marker.py) writes
+  # .current-session once the conversation actually starts.
+  if [ -n "$session_id" ] && [ -f "$project/${session_id}.jsonl" ]; then
     printf '%s\n' "$session_id"
-    printf '%s\n' "$session_id" > "$current_session_file"
     return 0
   fi
-
-  # Check .current-session marker — lets Mac and phone share the same session across reconnects
-  if [ -f "$current_session_file" ]; then
-    candidate="$(tr -d '[:space:]' < "$current_session_file")"
-    if [ -n "$candidate" ] && [ -f "$session_project_dir/${candidate}.jsonl" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  fi
-
-  # Find the latest interactive session
-  # Only skip queue-operation: those are definitively background agents started via /go or task queue
-  # file-history-snapshot, ai-title, permission-mode etc. can all appear in interactive sessions
-  found_id=""
-  while IFS= read -r f; do
-    candidate="$(basename "$f" .jsonl)"
-    if head -1 "$f" 2>/dev/null | grep -q '"type":"queue-operation"'; then
-      continue
-    fi
-    found_id="$candidate"
-    break
-  done < <(ls -t "$session_project_dir"/*.jsonl 2>/dev/null)
-
+  found_id="$(python3 "$lib_dir/sessionlib.py" resume-target "$session_name")"
   if [ -n "$found_id" ]; then
-    [ -n "$session_id" ] && echo "Warning: session '$session_id' not found - using latest interactive: $found_id" >&2
+    [ -n "$session_id" ] && echo "Warning: session '$session_id' not found - using $found_id" >&2
     printf '%s\n' "$found_id"
-    printf '%s\n' "$found_id" > "$current_session_file"
     return 0
   fi
 }
