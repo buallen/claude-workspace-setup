@@ -36,7 +36,10 @@ if [ "$SESSION_NAME" = "Personal" ]; then
   exec python3 "$SCRIPT_DIR/../lib/personal_history.py" --launch happy
 fi
 SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
-PROJ_DIR="$HOME/.claude/projects/-Users-kan-lu-claude-sessions-${SESSION_NAME// /-}"
+LIB_DIR="$(cd -P "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib" && pwd)"
+# Project-dir rule lives in sessionlib only (it used to hard-code "-Users-kan-lu-"
+# and replace spaces only, unlike Claude Code, which replaces every non [A-Za-z0-9-]).
+PROJ_DIR="$(python3 "$LIB_DIR/sessionlib.py" project-dir "$SESSION_NAME")"
 
 # .current-session can outlive its transcript: cleanupPeriodDays (14) purges old
 # JSONLs, and `--resume <purged uuid>` fails with "No conversation found" on
@@ -152,6 +155,12 @@ while true; do
 
   EXIT_CODE=$?
   ELAPSED=$(( $(date +%s) - START ))
+
+  # `sessionctl stop` drops this flag while it stops the session; without it a
+  # stop within 10 s of a start looks like a failed launch and gets retried.
+  if [ -e "$HOME/.claude/session-locks/${SESSION_NAME}.stopping" ]; then
+    break
+  fi
 
   # If happy ran for more than 10s, assume the user exited deliberately → stop.
   # NOTE: an external `kill` of a long-lived session also lands here and ends the

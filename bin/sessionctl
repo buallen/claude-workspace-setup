@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""sessionctl - one way to inspect, start, stop and restart workspace sessions.
+
+  sessionctl status [NAME] [--json]     state, conversation and processes
+  sessionctl start NAME                 start the agent in the session's pane (no-op if running)
+  sessionctl stop NAME [--force]        stop happy + claude cleanly, leave the pane at a shell
+  sessionctl restart NAME [--force]     stop + start under one lock
+  sessionctl idle [--hours N] [--json]  sessions idle (or waiting for input) for N+ hours
+
+Exit codes: 0 ok, 1 error, 2 usage / no such session, 3 busy (use --force),
+4 process identity changed under us, 5 a process would not stop, 75 locked.
+
+Why this exists (2026-10-23): five scripts each had their own way to start a
+session, three ways to tell whether one was alive, and all of them typed the
+launch command into the pane with `tmux send-keys ... Enter`. That breaks when
+a killed Claude leaves the terminal in raw mode, and can type into a live
+conversation. sessionctl starts the agent with `tmux respawn-pane`, never by
+typing, and stops it in the order happy actually needs (see stop()).
+"""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import glob
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+BIN_DIR = Path(os.path.realpath(__file__)).parent
+sys.path.insert(0, str(BIN_DIR.parent / "lib"))
+import sessionlib as sl  # noqa: E402
+
+LOCK_DIR = sl.HOME / ".claude" / "session-locks"
+LOG_FILE = sl.HOME / "Library" / "Logs" / "sessionctl.log"
+SMART_RESUME = BIN_DIR / "smart-resume.sh"
+
+OK, ERROR, USAGE, BUSY, IDENTITY, STUCK, LOCKED = 0, 1, 2, 3, 4, 5, 75
+
+HAPPY_EXIT_WAIT = 15     # happy's cleanup does a ~3 s HTTP call plus a flush
+CLAUDE_GRACE = 5         # claude often exits by itself once happy is gone
+CLAUDE_EXIT_WAIT = 10
+KILL_WAIT = 5
+SHELL_WAIT = 10
+START_WAIT = 45
+
+
+def log(message):
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}"
+    print(message)
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a") as stream:
+            stream.write(line + "\n")
+    except OSError:
+        pass
+
+
+class Locked(Exception):
+    pass
+
+
+@contextmanager
+def session_lock(name):
+    """One lock per session, shared by start/stop/restart and every caller."""
+    LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    handle = open(LOCK_DIR / f"{name}.lock", "w")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Locked(name)
+        yield
+    finally:
+        handle.close()
+
+
+def wait_gone(pid, seconds):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if not sl.alive(pid):
+            return True
+        time.sleep(0.5)
+    return not sl.alive(pid)
+
+
+def signal_same(ident, sig):
+    """Send sig only if pid still names the process we recorded."""
+    if ident is None or sl.identity(ident[0]) != ident:
+        return False
+    try:
+        os.kill(ident[0], sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def terminate(ident, wait, label):
+    """SIGTERM, wait, then SIGKILL. Returns OK, IDENTITY or STUCK."""
+    pid = ident[0]
+    if not sl.alive(pid):
+        return OK
+    if not signal_same(ident, signal.SIGTERM):
+        if not sl.alive(pid):
+            return OK
+        log(f"  {label} {pid}: identity changed, not touching it")
+        return IDENTITY
+    if wait_gone(pid, wait):
+        return OK
+    log(f"  {label} {pid}: ignored SIGTERM for {wait}s, sending SIGKILL")
+    signal_same(ident, signal.SIGKILL)
+    return OK if wait_gone(pid, KILL_WAIT) else STUCK
+
+
+def happy_bin_dir():
+    found = shutil.which("happy")
+    if found:
+        return str(Path(found).parent)
+    candidates = sorted(glob.glob(str(sl.HOME / ".nvm/versions/node/*/bin/happy")))
+    return str(Path(candidates[-1]).parent) if candidates else ""
+
+
+def launch_command(name):
+    """Shell command for the pane: reset the terminal, run smart-resume, keep a shell."""
+    env = ["env", "-u", "NO_COLOR", "COLORTERM=truecolor"]
+    bin_dir = happy_bin_dir()
+    if bin_dir:
+        env.append(f"PATH={bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+    if name in sl.PRIVATE_SESSIONS:
+        env.append(f"CLAUDE_CONFIG_DIR={sl.config_dir(name)}")
+    # A Claude that was killed leaves the pty in raw mode (-icrnl -isig); a new
+    # Claude that inherits it exits immediately. stty sane first.
+    return (f"stty sane 2>/dev/null; "
+            f"{shlex.join(env)} bash {shlex.quote(str(SMART_RESUME))} {shlex.quote(name)}; "
+            f"exec /bin/zsh -l")
+
+
+def fix_tty(procs):
+    if procs and procs.tty:
+        subprocess.run(["stty", "-f", procs.tty, "sane"], capture_output=True)
+
+
+def stop(name, force=False):
+    procs = sl.session_procs(name)
+    if procs is None:
+        log(f"✗ {name}: no such tmux session")
+        return USAGE
+    if not procs.happy and not procs.claude:
+        fix_tty(procs)
+        log(f"· {name}: already stopped")
+        return OK
+    state = sl.session_state(name, procs)
+    if state["state"] in ("busy", "background") and not force:
+        log(f"✗ {name}: {state['state']} ({'; '.join(state['reasons'])}), not stopping without --force")
+        return BUSY
+
+    # Keep the marker on the conversation happy is actually syncing, so the
+    # next start resumes it even if the SessionStart hook missed a change.
+    uuid, source = sl.live_conversation(name, procs)
+    if uuid and source == "happy" and name not in sl.PRIVATE_SESSIONS and sl.read_marker(name) != uuid:
+        sl.write_marker(name, uuid)
+        log(f"  {name}: marker -> {uuid} (from happy)")
+
+    happy = [sl.identity(pid) for pid in procs.happy]
+    claude = [sl.identity(pid) for pid in procs.claude]
+    launcher = [sl.identity(pid) for pid in procs.launcher]
+    log(f"→ {name}: stopping happy {procs.happy}, claude {procs.claude} (conversation {uuid or '?'})")
+    flag = LOCK_DIR / f"{name}.stopping"
+    flag.touch()   # tells smart-resume not to treat this exit as a failed launch
+    try:
+        return _stop_processes(name, happy, claude, launcher)
+    finally:
+        flag.unlink(missing_ok=True)
+
+
+def _stop_processes(name, happy, claude, launcher):
+    # 1. happy first. Its SIGTERM handler marks the session disconnected (not
+    #    archived) and exits, but never kills its claude child. Killing claude
+    #    first does not work: the launcher would immediately respawn it.
+    for ident in filter(None, happy):
+        rc = terminate(ident, HAPPY_EXIT_WAIT, "happy")
+        if rc != OK:
+            return rc
+
+    # 2. The orphaned claude and its launcher, now reparented to launchd.
+    for ident in filter(None, claude):
+        if wait_gone(ident[0], CLAUDE_GRACE):
+            continue
+        for lid in filter(None, launcher):
+            if sl.alive(lid[0]):
+                rc = terminate(lid, CLAUDE_EXIT_WAIT, "launcher")
+                if rc == IDENTITY:
+                    return rc
+        rc = terminate(ident, CLAUDE_EXIT_WAIT, "claude")
+        if rc != OK:
+            return rc
+
+    # 3. smart-resume treats an exit after 10+ s as deliberate and returns the
+    #    pane to its shell; wait for that, then repair the terminal mode.
+    deadline = time.time() + SHELL_WAIT
+    while time.time() < deadline:
+        info = sl.pane(name)
+        if info and info["command"] in sl.SHELL_COMMANDS:
+            break
+        time.sleep(0.5)
+    fix_tty(sl.session_procs(name))
+    log(f"✓ {name}: stopped")
+    return OK
+
+
+def start(name):
+    directory = sl.session_dir(name)
+    if not directory.is_dir():
+        log(f"✗ {name}: {directory} does not exist")
+        return USAGE
+    command = launch_command(name)
+    if name not in sl.list_sessions():
+        code, _ = sl.tmux("new-session", "-d", "-s", name, "-n", f"{name} 💤", "-c", str(directory), command)
+        if code != 0:
+            log(f"✗ {name}: tmux new-session failed")
+            return ERROR
+        log(f"→ {name}: created tmux session")
+    else:
+        procs = sl.session_procs(name)
+        if procs and (procs.happy or procs.claude):
+            log(f"· {name}: already running")
+            return OK
+        info = sl.pane(name)
+        if info and info["command"] not in sl.SHELL_COMMANDS:
+            log(f"✗ {name}: pane is running '{info['command']}', not replacing it")
+            return BUSY
+        # respawn-pane replaces the idle shell; nothing is typed into the pane.
+        code, _ = sl.tmux("respawn-pane", "-k", "-t", sl.target(name), "-c", str(directory), command)
+        if code != 0:
+            log(f"✗ {name}: tmux respawn-pane failed")
+            return ERROR
+    deadline = time.time() + START_WAIT
+    while time.time() < deadline:
+        procs = sl.session_procs(name)
+        if procs and procs.happy and procs.claude:
+            uuid, source = sl.live_conversation(name, procs)
+            log(f"✓ {name}: running (happy {procs.happy[0]}, claude {procs.claude[0]}, conversation {uuid or 'new'})")
+            return OK
+        time.sleep(1)
+    log(f"✗ {name}: agent did not come up within {START_WAIT}s; see `tmux capture-pane -p -t '={name}:'`")
+    return ERROR
+
+
+def status_rows(names):
+    table = sl.process_table()
+    rows = []
+    for name in names:
+        procs = sl.session_procs(name, table)
+        state = sl.session_state(name, procs)
+        uuid, source = sl.live_conversation(name, procs) if procs else (None, None)
+        version = None
+        if procs and procs.happy:
+            command = table.get(procs.happy[0], (0, ""))[1]
+            version = "happy-coder" if "happy-coder" in command else "happy"
+        idle = state["idle_since"]
+        rows.append({
+            "name": name, "state": state["state"], "reasons": state["reasons"],
+            "idle_hours": round((time.time() - idle) / 3600, 1) if idle else None,
+            "conversation": uuid, "conversation_source": source,
+            "marker_matches": (sl.read_marker(name) == uuid) if uuid else None,
+            "happy_pids": procs.happy if procs else [], "claude_pids": procs.claude if procs else [],
+            "package": version,
+        })
+    return rows
+
+
+def cmd_status(args):
+    names = [args.name] if args.name else sl.list_sessions()
+    rows = status_rows(names)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        return OK
+    for r in rows:
+        idle = f"{r['idle_hours']}h" if r["idle_hours"] is not None else "-"
+        conv = f"{(r['conversation'] or '-')[:8]}({r['conversation_source'] or '-'})"
+        print(f"{r['name']:20} {r['state']:10} idle {idle:>6}  {conv:16} {r['package'] or '-':11} {'; '.join(r['reasons'])}")
+    return OK
+
+
+def cmd_idle(args):
+    rows = [r for r in status_rows(sl.list_sessions())
+            if r["state"] in ("idle", "waiting") and (r["idle_hours"] or 0) >= args.hours]
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+    else:
+        for r in sorted(rows, key=lambda r: -r["idle_hours"]):
+            print(f"{r['name']}\t{r['state']}\t{r['idle_hours']}h")
+    return OK
+
+
+def with_lock(name, fn):
+    try:
+        with session_lock(name):
+            return fn()
+    except Locked:
+        log(f"✗ {name}: another sessionctl is working on it (locked)")
+        return LOCKED
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="sessionctl", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("status"); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("idle"); p.add_argument("--hours", type=float, default=24); p.add_argument("--json", action="store_true")
+    for cmd in ("start", "stop", "restart"):
+        p = sub.add_parser(cmd); p.add_argument("name")
+        if cmd != "start":
+            p.add_argument("--force", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "status":
+        return cmd_status(args)
+    if args.cmd == "idle":
+        return cmd_idle(args)
+    if args.cmd == "start":
+        return with_lock(args.name, lambda: start(args.name))
+    if args.cmd == "stop":
+        return with_lock(args.name, lambda: stop(args.name, args.force))
+    return with_lock(args.name, lambda: stop(args.name, args.force) or start(args.name))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
