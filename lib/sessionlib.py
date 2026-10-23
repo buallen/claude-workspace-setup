@@ -38,7 +38,10 @@ RESUME_ARG_RE = re.compile(r"--(?:resume|session-id)[ =]([0-9a-f-]{36})")
 # and the tab emoji agree.
 JSONL_FRESH = 180
 JOB_FRESH = 600
-WORK_RE = re.compile(r"·\s*↑\s*[\d.]+k?\s*tokens|esc to interrupt|·\s*\d+\s*(shell|tool)\b")
+# Claude Code's spinner shows "↓ N tokens" (it used to be "↑"); sub-agents
+# appear as "◯ <type> ..." rows (measured by the nightly upgrade, 2026-10-20).
+WORK_RE = re.compile(r"·\s*[↑↓]\s*[\d.]+k?\s*tokens|esc to interrupt|·\s*\d+\s*(shell|tool)\b|^\s*◯\s", re.M)
+INTERPRETERS = frozenset({"node", "bash", "sh", "zsh", "python3", "python"})
 SHELL_COMMANDS = frozenset({"zsh", "bash", "sh", "login", "-zsh"})
 
 
@@ -170,8 +173,26 @@ class SessionProcs:
     pane_command: str = ""
     happy: list = field(default_factory=list)
     launcher: list = field(default_factory=list)
-    claude: list = field(default_factory=list)
+    claude: list = field(default_factory=list)       # the session's main claude only
     tool_shells: list = field(default_factory=list)
+    smart_resume: list = field(default_factory=list)
+
+
+def program(command):
+    """The program a command line runs: the script for node/bash/python, else argv[0].
+
+    Classifying on this instead of searching the whole line keeps a tool shell
+    such as `zsh -c '... grep claude.exe ...'` from counting as claude.
+    """
+    tokens = command.split()
+    if not tokens:
+        return ""
+    if os.path.basename(tokens[0]) in INTERPRETERS and not TOOL_SHELL_RE.match(command):
+        for token in tokens[1:]:
+            if not token.startswith("-"):
+                return token
+        return ""
+    return tokens[0]
 
 
 def session_procs(name, table=None):
@@ -180,18 +201,25 @@ def session_procs(name, table=None):
         return None
     table = table or process_table()
     procs = SessionProcs(info["pid"], info["tty"], info["command"])
-    tree = descendants(table, info["pid"])
-    for pid in tree:
-        command = table.get(pid, (0, ""))[1]
-        if HAPPY_WRAPPER_RE.search(command) and " daemon" not in command:
+    candidates = []
+    for pid in descendants(table, info["pid"]):
+        ppid, command = table.get(pid, (0, ""))
+        prog = program(command)
+        if HAPPY_WRAPPER_RE.search(prog) and " daemon" not in command:
             procs.happy.append(pid)
-        elif LAUNCHER_RE.search(command):
+        elif LAUNCHER_RE.search(prog):
             procs.launcher.append(pid)
-        elif CLAUDE_RE.search(command):
-            procs.claude.append(pid)
+        elif CLAUDE_RE.search(prog + " "):
+            candidates.append((pid, ppid))
+        elif prog.endswith("smart-resume.sh"):
+            procs.smart_resume.append(pid)
+    # The main claude is started by the launcher (local mode) or by the happy
+    # wrapper itself (remote mode). A `claude -p` run from a tool shell is not.
+    owners = set(procs.launcher) | set(procs.happy)
+    procs.claude = [pid for pid, ppid in candidates if ppid in owners]
     for claude in procs.claude:
         for pid in descendants(table, claude)[1:]:
-            if TOOL_SHELL_RE.search(table.get(pid, (0, ""))[1]):
+            if TOOL_SHELL_RE.match(table.get(pid, (0, ""))[1]):
                 procs.tool_shells.append(pid)
     return procs
 
@@ -255,22 +283,44 @@ def background_job_ids(name):
     return ids
 
 
-def has_effective_message(path, max_bytes=4 << 20):
-    """True if the last max_bytes of a transcript hold a real user/assistant turn."""
+def has_effective_message(path, chunk=1 << 20):
+    """True if a transcript holds at least one real user/assistant turn.
+
+    Scans backwards in chunks and stops at the first hit, so the usual case
+    (a recent turn near the end) reads one chunk, and a tail full of large
+    tool results does not hide an active conversation.
+    """
     try:
-        size = path.stat().st_size
         with path.open("rb") as stream:
-            stream.seek(max(0, size - max_bytes))
-            data = stream.read()
+            end = stream.seek(0, os.SEEK_END)
+            carry = b""
+            while end > 0:
+                start = max(0, end - chunk)
+                stream.seek(start)
+                data = stream.read(end - start) + carry
+                lines = data.split(b"\n")
+                carry = lines.pop(0) if start > 0 else b""   # may be cut mid-line
+                for line in reversed(lines):
+                    if not line.strip():
+                        continue
+                    try:
+                        if is_effective_message(json.loads(line)):
+                            return True
+                    except (ValueError, UnicodeError):
+                        continue
+                end = start
     except OSError:
         return False
-    for line in data.splitlines():
-        try:
-            if is_effective_message(json.loads(line)):
-                return True
-        except (ValueError, UnicodeError):
-            continue
     return False
+
+
+def valid_conversation(name, uuid):
+    """A conversation worth resuming: its transcript exists and holds a real turn.
+
+    After /clear the hook may point the marker at a conversation nobody has
+    typed into yet; `--resume` on that fails and smart-resume gives up.
+    """
+    return bool(uuid) and has_effective_message(conversation_file(name, uuid))
 
 
 def newest_conversation(name):
@@ -285,8 +335,13 @@ def newest_conversation(name):
     if not project.is_dir():
         return None
     skip = background_job_ids(name)
-    files = sorted(project.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in files:
+    files = []
+    for path in project.glob("*.jsonl"):
+        try:
+            files.append((path.stat().st_mtime, path))
+        except OSError:
+            continue  # purged while we were looking
+    for _, path in sorted(files, reverse=True):
         if UUID_RE.fullmatch(path.stem) and path.stem not in skip and has_effective_message(path):
             return path.stem
     return None
@@ -306,7 +361,7 @@ def live_conversation(name, procs=None):
             if match:
                 return match.group(1), "claude-args"
     uuid = read_marker(name)
-    if uuid and conversation_file(name, uuid).exists():
+    if valid_conversation(name, uuid):
         return uuid, "marker"
     uuid = newest_conversation(name)
     return (uuid, "newest") if uuid else (None, None)
@@ -338,18 +393,25 @@ def hook_status(name):
 
 
 def session_state(name, procs=None):
-    """{'state': stopped|busy|background|waiting|idle, 'reasons': [...], 'idle_since': epoch|None}"""
+    """{'state': stopped|starting|busy|background|waiting|idle|missing, 'reasons': [...], 'idle_since': epoch|None}"""
     procs = procs if procs is not None else session_procs(name)
     if procs is None:
         return {"state": "missing", "reasons": ["no tmux session"], "idle_since": None}
     uuid, _ = live_conversation(name, procs)
     last_write = None
     if uuid:
-        try:
-            last_write = conversation_file(name, uuid).stat().st_mtime
-        except OSError:
-            pass
+        # Sub-agents (Task/Workflow) write their own transcripts under
+        # <uuid>/subagents/; the main file can sit still while they work.
+        paths = [conversation_file(name, uuid)]
+        paths += list((project_dir(name) / uuid / "subagents").glob("*.jsonl"))
+        for path in paths:
+            try:
+                last_write = max(last_write or 0, path.stat().st_mtime)
+            except OSError:
+                pass
     if not procs.happy and not procs.claude:
+        if procs.smart_resume:
+            return {"state": "starting", "reasons": ["smart-resume is (re)launching"], "idle_since": None}
         return {"state": "stopped", "reasons": ["no happy/claude process"], "idle_since": last_write}
     reasons = []
     if procs.tool_shells:
@@ -402,12 +464,12 @@ def auth_error_pending(name, max_bytes=256 << 10):
 # ── CLI for shell scripts (smart-resume.sh, hooks) ───────────────────────────
 
 def resume_target(name):
-    """Conversation to resume: the marker if its transcript still exists, else the newest real one.
+    """Conversation to resume: the marker if it holds a real turn, else the newest real one.
 
     Read-only. The marker is written by the SessionStart hook, not by readers.
     """
     uuid = read_marker(name)
-    if uuid and conversation_file(name, uuid).exists():
+    if valid_conversation(name, uuid):
         return uuid
     return newest_conversation(name)
 
@@ -416,7 +478,13 @@ def _main(argv):
     if len(argv) == 3 and argv[1] == "project-dir":
         print(project_dir(argv[2]))
     elif len(argv) == 3 and argv[1] == "resume-target":
-        print(resume_target(argv[2]) or "")
+        # Exit 0 with an empty line = no conversation (start fresh); exit 1 = we
+        # could not tell, and the caller must not silently start a new one.
+        try:
+            print(resume_target(argv[2]) or "")
+        except Exception as exc:  # noqa: BLE001
+            print(f"resume-target failed: {exc!r}", file=__import__("sys").stderr)
+            return 1
     elif len(argv) == 3 and argv[1] == "name-from-cwd":
         print(name_from_cwd(argv[2]) or "")
     elif len(argv) == 3 and argv[1] == "auth-error":

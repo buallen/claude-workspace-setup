@@ -6,6 +6,7 @@
   sessionctl stop NAME [--force]        stop happy + claude cleanly, leave the pane at a shell
   sessionctl restart NAME [--force]     stop + start under one lock
   sessionctl idle [--hours N] [--json]  sessions idle (or waiting for input) for N+ hours
+  sessionctl lock NAME -- CMD...        run CMD holding NAME's lock (75 if taken)
 
 Exit codes: 0 ok, 1 error, 2 usage / no such session, 3 busy (use --force),
 4 process identity changed under us, 5 a process would not stop, 75 locked.
@@ -144,13 +145,37 @@ def fix_tty(procs):
         subprocess.run(["stty", "-f", procs.tty, "sane"], capture_output=True)
 
 
+@contextmanager
+def stopping_flag(name):
+    """Tell smart-resume this exit is deliberate, so it neither retries nor relaunches.
+
+    smart-resume honours the flag only while it is fresh (mtime < 2 min), so a
+    flag left behind by a killed sessionctl cannot disable its retries for good.
+    """
+    LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    flag = LOCK_DIR / f"{name}.stopping"
+    flag.write_text(f"{os.getpid()} {int(time.time())}\n")
+    try:
+        yield
+    finally:
+        flag.unlink(missing_ok=True)
+
+
 def stop(name, force=False):
     procs = sl.session_procs(name)
     if procs is None:
         log(f"✗ {name}: no such tmux session")
         return USAGE
-    if not procs.happy and not procs.claude:
-        fix_tty(procs)
+    if not procs.happy and not procs.claude and not procs.launcher:
+        if procs.smart_resume:
+            # Between retries (sleep / get_uuid / fork): end the loop itself.
+            with stopping_flag(name):
+                for ident in filter(None, (sl.identity(pid) for pid in procs.smart_resume)):
+                    rc = terminate(ident, CLAUDE_EXIT_WAIT, "smart-resume")
+                    if rc != OK:
+                        return rc
+                wait_for_shell(name)
+        fix_tty(sl.session_procs(name))
         log(f"· {name}: already stopped")
         return OK
     state = sl.session_state(name, procs)
@@ -161,54 +186,77 @@ def stop(name, force=False):
     # Keep the marker on the conversation happy is actually syncing, so the
     # next start resumes it even if the SessionStart hook missed a change.
     uuid, source = sl.live_conversation(name, procs)
-    if uuid and source == "happy" and name not in sl.PRIVATE_SESSIONS and sl.read_marker(name) != uuid:
+    if (uuid and source == "happy" and name not in sl.PRIVATE_SESSIONS
+            and sl.read_marker(name) != uuid and sl.valid_conversation(name, uuid)):
         sl.write_marker(name, uuid)
         log(f"  {name}: marker -> {uuid} (from happy)")
 
-    happy = [sl.identity(pid) for pid in procs.happy]
-    claude = [sl.identity(pid) for pid in procs.claude]
-    launcher = [sl.identity(pid) for pid in procs.launcher]
-    log(f"→ {name}: stopping happy {procs.happy}, claude {procs.claude} (conversation {uuid or '?'})")
-    flag = LOCK_DIR / f"{name}.stopping"
-    flag.touch()   # tells smart-resume not to treat this exit as a failed launch
-    try:
-        return _stop_processes(name, happy, claude, launcher)
-    finally:
-        flag.unlink(missing_ok=True)
+    recorded = {
+        "happy": [i for i in map(sl.identity, procs.happy) if i],
+        "launcher": [i for i in map(sl.identity, procs.launcher) if i],
+        "claude": [i for i in map(sl.identity, procs.claude) if i],
+    }
+    log(f"→ {name}: stopping happy {procs.happy}, launcher {procs.launcher}, claude {procs.claude} (conversation {uuid or '?'})")
+    with stopping_flag(name):
+        rc = _stop_processes(name, recorded)
+    if rc == OK:
+        log(f"✓ {name}: stopped")
+    return rc
 
 
-def _stop_processes(name, happy, claude, launcher):
-    # 1. happy first. Its SIGTERM handler marks the session disconnected (not
-    #    archived) and exits, but never kills its claude child. Killing claude
-    #    first does not work: the launcher would immediately respawn it.
-    for ident in filter(None, happy):
-        rc = terminate(ident, HAPPY_EXIT_WAIT, "happy")
-        if rc != OK:
-            return rc
-
-    # 2. The orphaned claude and its launcher, now reparented to launchd.
-    for ident in filter(None, claude):
-        if wait_gone(ident[0], CLAUDE_GRACE):
-            continue
-        for lid in filter(None, launcher):
-            if sl.alive(lid[0]):
-                rc = terminate(lid, CLAUDE_EXIT_WAIT, "launcher")
-                if rc == IDENTITY:
-                    return rc
-        rc = terminate(ident, CLAUDE_EXIT_WAIT, "claude")
-        if rc != OK:
-            return rc
-
-    # 3. smart-resume treats an exit after 10+ s as deliberate and returns the
-    #    pane to its shell; wait for that, then repair the terminal mode.
+def wait_for_shell(name):
     deadline = time.time() + SHELL_WAIT
     while time.time() < deadline:
         info = sl.pane(name)
         if info and info["command"] in sl.SHELL_COMMANDS:
-            break
+            return True
         time.sleep(0.5)
+    return False
+
+
+def _stop_processes(name, recorded):
+    # 1. happy first. Its SIGTERM handler marks the session disconnected (not
+    #    archived) and exits, but never kills its claude child. Killing claude
+    #    first does not work: the launcher would immediately respawn it.
+    for ident in recorded["happy"]:
+        rc = terminate(ident, HAPPY_EXIT_WAIT, "happy")
+        if rc != OK:
+            return rc
+
+    # 2. Every launcher, with the claude it is running right now, including one
+    #    it started after we looked (e.g. stop called seconds after start).
+    #    Launcher before claude: a launcher outliving its claude respawns it.
+    for lid in recorded["launcher"]:
+        table = sl.process_table()
+        children = [sl.identity(pid) for pid, (ppid, command) in table.items()
+                    if ppid == lid[0] and sl.CLAUDE_RE.search(sl.program(command) + " ")]
+        recorded["claude"].extend(i for i in children if i and i not in recorded["claude"])
+        rc = terminate(lid, CLAUDE_EXIT_WAIT, "launcher")
+        if rc != OK:
+            return rc
+
+    # 3. The (now orphaned) claude processes; give each a moment to exit alone.
+    for ident in recorded["claude"]:
+        if wait_gone(ident[0], CLAUDE_GRACE):
+            continue
+        rc = terminate(ident, CLAUDE_EXIT_WAIT, "claude")
+        if rc != OK:
+            return rc
+
+    # 4. Verify instead of assuming: nothing we recorded is left, and nothing new
+    #    took its place in the pane.
+    left = [f"{kind} {i[0]}" for kind, ids in recorded.items() for i in ids if sl.identity(i[0]) == i]
+    procs = sl.session_procs(name)
+    if procs and (procs.happy or procs.launcher or procs.claude):
+        left.append(f"pane still runs happy {procs.happy} launcher {procs.launcher} claude {procs.claude}")
+    if left:
+        log(f"✗ {name}: still running after stop: {'; '.join(left)}")
+        return STUCK
+
+    # 5. smart-resume ends its loop on the flag and the pane falls back to its
+    #    shell; then repair the terminal mode a killed claude left behind.
+    wait_for_shell(name)
     fix_tty(sl.session_procs(name))
-    log(f"✓ {name}: stopped")
     return OK
 
 
@@ -314,6 +362,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("status"); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("idle"); p.add_argument("--hours", type=float, default=24); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("lock", help="run a command while holding the session's lock")
+    p.add_argument("name"); p.add_argument("command", nargs=argparse.REMAINDER)
     for cmd in ("start", "stop", "restart"):
         p = sub.add_parser(cmd); p.add_argument("name")
         if cmd != "start":
@@ -326,6 +376,11 @@ def main(argv=None):
         return cmd_status(args)
     if args.cmd == "idle":
         return cmd_idle(args)
+    if args.cmd == "lock":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        if not command:
+            parser.error("lock needs a command after --")
+        return with_lock(args.name, lambda: subprocess.call(command))
     if args.cmd == "start":
         return with_lock(args.name, lambda: start(args.name, wait=not args.no_wait))
     if args.cmd == "stop":

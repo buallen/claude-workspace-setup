@@ -54,5 +54,10 @@ process.on('SIGUSR1', () => {
   }
   fireSessionStart(conversation, 'clear');
 });
+// SIGUSR2 = the Bash tool runs `claude -p ...` from a tool shell: a nested
+// claude that descends from the happy wrapper but is not the main one.
+process.on('SIGUSR2', () => {
+  spawn('/bin/zsh', ['-c', `${process.execPath} ${__filename} -p nested; true`], { stdio: 'ignore' });
+});
 process.on('SIGTERM', () => process.exit(143));
 setInterval(() => {}, 1000);

@@ -150,11 +150,25 @@ relaunch_in_pane() {
   tmux respawn-pane -k -t "$TARGET" -c "$(session_dir "$SESSION_NAME")" "stty sane 2>/dev/null; $cmd; exec /bin/zsh -l"
 }
 
+# sessionctl (and sessionlib, the marker hook) know two config roots: ~/.claude-private
+# for Personal, ~/.claude for everything else. Refuse instead of silently ignoring another.
+if [ "$USE_SESSIONCTL" = 1 ] && [ "$SESSION_NAME" != "Personal" ] \
+   && [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ "$CLAUDE_CONFIG_DIR" != "$HOME/.claude" ]; then
+  echo "Error: happy sessions other than Personal run under ~/.claude (got CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR)" >&2
+  exit 1
+fi
+
 # An explicit conversation id for a happy session is the user's choice: record it
 # so smart-resume resumes it (the SessionStart hook keeps it current afterwards).
+# Not while the session is running: that would fight the live conversation.
 if [ "$USE_SESSIONCTL" = 1 ] && [ -n "$SESSION_ID" ]; then
-  python3 "$REPO_DIR/lib/sessionlib.py" write-marker "$SESSION_NAME" "$SESSION_ID" \
-    || echo "Warning: session '$SESSION_ID' not found for $SESSION_NAME - resuming the current one" >&2
+  running_pane="$(tmux list-panes -t "$TARGET" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  if [ -n "$running_pane" ] && pane_has_other_child "$running_pane"; then
+    echo "Warning: $SESSION_NAME is running; not switching it to $SESSION_ID. Stop it first: sessionctl stop '$SESSION_NAME'" >&2
+  else
+    python3 "$REPO_DIR/lib/sessionlib.py" write-marker "$SESSION_NAME" "$SESSION_ID" \
+      || echo "Warning: session '$SESSION_ID' not found for $SESSION_NAME - resuming the current one" >&2
+  fi
 fi
 
 if ! tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then

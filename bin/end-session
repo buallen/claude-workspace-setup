@@ -26,6 +26,12 @@ if [ -z "$SESSION_NAME" ]; then
 fi
 
 # Stop the agent in happy's order first (no orphaned claude), then drop tmux.
-"$SCRIPT_DIR/sessionctl" stop "$SESSION_NAME" --force >/dev/null 2>&1 || true
+if "$SCRIPT_DIR/sessionctl" stop "$SESSION_NAME" --force >/dev/null 2>&1; then rc=0; else rc=$?; fi
+case "$rc" in
+  0|2) ;;   # stopped, or no such tmux session
+  75) echo "Error: another sessionctl is working on $SESSION_NAME (e.g. a restart); try again in a minute" >&2
+      exit 1 ;;
+  *)  echo "Warning: clean stop of $SESSION_NAME failed (sessionctl rc=$rc); killing the tmux session anyway" >&2 ;;
+esac
 tmux kill-session -t "=$SESSION_NAME" 2>/dev/null && echo "Killed session: $SESSION_NAME" || echo "No running session: $SESSION_NAME"
 python3 "$REPO_DIR/lib/vscode_restore.py" remove "$VSCODE_SETTINGS" "$SESSION_NAME"

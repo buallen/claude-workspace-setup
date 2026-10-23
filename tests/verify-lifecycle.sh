@@ -86,6 +86,8 @@ NEW="$(cat "$SD/.current-session")"
 check "hook: /clear moves the marker to the new conversation" '[ "$NEW" != "$UUID" ] && [ -f "$PROJ/$NEW.jsonl" ]'
 (cd "$SD" && node "$FAKE/claude/claude.exe" -p x </dev/null >/dev/null 2>&1)
 check "hook: a one-shot claude -p in the session dir leaves the marker alone" '[ "$(cat "$SD/.current-session")" = "$NEW" ]'
+kill -USR2 "$cpid"; sleep 3
+check "hook: claude -p run from a tool shell inside the session leaves the marker alone" '[ "$(cat "$SD/.current-session")" = "$NEW" ]'
 touch -t 202601010000 "$PROJ/$NEW.jsonl"   # age it, or the session counts as busy for 3 min
 
 # 4. exact names only: "Test" must not prefix-match "Test Sess"
@@ -139,6 +141,25 @@ check "restart returns 0, new claude, resumes the post-/clear conversation" '[ $
 check "idle --hours 24 lists the long-idle session" '[ $rc -eq 0 ]'
 "${SC[@]}" idle --hours 20000 --json | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)==[] else 1)"; rc=$?
 check "idle --hours 20000 lists nothing" '[ $rc -eq 0 ]'
+
+# 12. stop seconds after a start, before claude exists: nothing appears afterwards
+"${SC[@]}" stop "$NAME" --force >/dev/null
+tm set-environment -g FAKE_LAUNCH_DELAY 4
+"${SC[@]}" start "$NAME" --no-wait >/dev/null
+sleep 2
+"${SC[@]}" stop "$NAME" --force >/dev/null; rc=$?
+sleep 6
+check "stop before claude is up: rc 0 and no claude shows up later" '[ $rc -eq 0 ] && [ "$(count "claude/claude.exe|claude_local_launcher|happy/dist/index.mjs")" = 0 ]'
+tm set-environment -gu FAKE_LAUNCH_DELAY
+
+# 13. `sessionctl lock` holds the same per-session lock
+"${SC[@]}" start "$NAME" >/dev/null
+"${SC[@]}" lock "$NAME" -- sleep 4 &
+holder=$!
+sleep 1
+"${SC[@]}" restart "$NAME" >/dev/null; rc=$?
+check "restart while 'sessionctl lock' holds the session -> 75" '[ $rc -eq 75 ]'
+wait $holder
 
 # 11. nothing starts an agent by typing into a pane any more
 leftover="$(grep -rnE 'send-keys.*(happy --yolo|smart-resume|personal_history|claude --dangerously)' "$REPO/bin" "$REPO/ops" "$REPO/lib" "$REPO/hooks" 2>/dev/null)"

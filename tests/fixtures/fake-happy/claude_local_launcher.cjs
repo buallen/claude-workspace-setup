@@ -10,4 +10,6 @@ function run() {
   child.on('exit', () => { if (!stopping) setTimeout(run, 200); });
 }
 process.on('SIGTERM', () => { stopping = true; process.exit(0); });
-run();
+// FAKE_LAUNCH_DELAY: claude comes up a few seconds after the launcher, like the
+// real one; a stop in that window must not leave a claude behind.
+setTimeout(run, Number(process.env.FAKE_LAUNCH_DELAY || 0) * 1000);

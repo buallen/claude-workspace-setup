@@ -222,10 +222,9 @@ while IFS= read -r sess; do
   # （已经发生过一次），这道只看 jsonl 的 mtime，不依赖任何渲染。
   # 实测依据：真正空闲的 session 从上次重启起 7.5 小时一个字节都没写；
   # 而被误杀的 Infra 在 kill 前 1 秒还在写。阈值 600s 给慢工具留足余量。
-  if [ "$sess" = "Personal" ]; then gate_base="$HOME/.claude-private/projects"
-  else gate_base="$HOME/.claude/projects"; fi
-  gate_slug=$(echo "$HOME/claude-sessions/$sess" | sed 's|[/. ]|-|g')
-  gate_jsonl=$(ls -t "$gate_base/$gate_slug"/*.jsonl 2>/dev/null | head -1)
+  # project 目录规则只在 sessionlib 里（这里原来用 sed 's|[/. ]|-|g'，名字带 _ 时对不上）
+  gate_dir=$(python3 "$HOME/.claude/claude-workspace/lib/sessionlib.py" project-dir "$sess")
+  gate_jsonl=$(ls -t "$gate_dir"/*.jsonl 2>/dev/null | head -1)
   if [ -n "$gate_jsonl" ]; then
     gate_age=$(( $(date +%s) - $(stat -f '%m' "$gate_jsonl" 2>/dev/null || echo 0) ))
     if [ "$gate_age" -lt 600 ]; then

@@ -26,21 +26,25 @@ MAX_FAILURES=2
 
 mkdir -p "$STATE_DIR"
 
-# Single-instance lock
-if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    if [ -f "$LOCK_DIR/age" ]; then
-        age=$(( $(date +%s) - $(stat -f%m "$LOCK_DIR/age" 2>/dev/null || echo 0) ))
-        if [ "$age" -gt 900 ]; then
-            rm -rf "$LOCK_DIR" && mkdir "$LOCK_DIR" || exit 0
-        else
-            exit 0
-        fi
-    else
-        exit 0
-    fi
+# Single-instance lock (not in --reauth mode: that is our own child, run
+# under the session's sessionctl lock while the parent holds this one).
+if [ "${1:-}" != "--reauth" ]; then
+  # Single-instance lock
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+      if [ -f "$LOCK_DIR/age" ]; then
+          age=$(( $(date +%s) - $(stat -f%m "$LOCK_DIR/age" 2>/dev/null || echo 0) ))
+          if [ "$age" -gt 900 ]; then
+              rm -rf "$LOCK_DIR" && mkdir "$LOCK_DIR" || exit 0
+          else
+              exit 0
+          fi
+      else
+          exit 0
+      fi
+  fi
+  touch "$LOCK_DIR/age"
+  trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 fi
-touch "$LOCK_DIR/age"
-trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 
 if [ -f "$LOG_FILE" ] && [ "$(stat -f%z "$LOG_FILE")" -gt "$MAX_LOG_SIZE" ]; then
     mv "$LOG_FILE" "$LOG_FILE.old"
@@ -141,6 +145,18 @@ run_in_session_oauth() {
     return 0
 }
 
+# --reauth NAME: run by `sessionctl lock NAME -- $0 --reauth NAME`, i.e. while
+# holding the session's lock, so a nightly restart cannot interleave with the
+# keys typed below. Re-check right before typing: the snapshot may be stale.
+if [ "${1:-}" = "--reauth" ]; then
+    session="$2"
+    state=$(session_state "$session")
+    case "$state" in idle|waiting) ;; *) log "$session: now $state, not typing /login"; exit 3 ;; esac
+    python3 "$HOME/.claude/claude-workspace/lib/sessionlib.py" auth-error "$session" || { log "$session: auth error gone, not typing /login"; exit 3; }
+    run_in_session_oauth "$session"
+    exit $?
+fi
+
 # One name per line: names contain spaces ("Product priorities"), and the old
 # `for session in $SESSIONS` split them into words.
 while IFS= read -r session; do
@@ -192,8 +208,20 @@ while IFS= read -r session; do
     state=$(session_state "$session")
     case "$state" in
         stopped)
-            log "$session: happy/claude gone — restarting via sessionctl"
-            if "$SESSIONCTL" start "$session" >> "$LOG_FILE" 2>&1; then
+            # Only an auth failure is this watchdog's business; a session that
+            # was stopped on purpose (sessionctl stop) stays stopped.
+            if ! python3 "$HOME/.claude/claude-workspace/lib/sessionlib.py" auth-error "$session"; then
+                log "$session: stopped, no auth error in its transcript — leaving it stopped"
+                continue
+            fi
+            log "$session: happy/claude gone after an auth error — restarting via sessionctl"
+            "$SESSIONCTL" start "$session" >> "$LOG_FILE" 2>&1
+            rc=$?
+            if [ $rc -eq 75 ]; then
+                log "  $session: another sessionctl holds the lock — skip, not a failure"
+                continue
+            fi
+            if [ $rc -eq 0 ]; then
                 notify_lark "🔄 $session 的 happy 已自动重新拉起（续接原对话）。"
                 date +%s > "$state_file"
                 rm -f "$fail_file"
@@ -232,7 +260,13 @@ while IFS= read -r session; do
         continue
     fi
 
-    if run_in_session_oauth "$session"; then
+    "$SESSIONCTL" lock "$session" -- /bin/bash "$0" --reauth "$session"
+    rc=$?
+    if [ $rc -eq 75 ] || [ $rc -eq 3 ]; then
+        log "$session: reauth skipped (rc=$rc: locked or no longer idle with an auth error)"
+        continue
+    fi
+    if [ $rc -eq 0 ]; then
         log "$session: in-session reauth SUCCESS"
         notify_lark "✅ $session session 已自动 reauth 完成。可以继续用了。"
         rm -f "$fail_file"

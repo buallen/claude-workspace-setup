@@ -94,8 +94,9 @@ fork_session() {
   echo "[smart-resume] bg-agent lock on $uuid — forking..." >&2
   new_uuid=$(cd "$SESSION_DIR" && SESSION_MARKER_SKIP=1 claude --resume "$uuid" --fork-session \
       --dangerously-skip-permissions --print "." --output-format json 2>/tmp/smart-resume-fork.log \
-    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("session_id", ""))' 2>/dev/null)
-  if [ -n "$new_uuid" ] && [ "$new_uuid" != "$uuid" ]; then
+    | python3 -c 'import json, sys; d = json.load(sys.stdin); print("" if d.get("is_error") else d.get("session_id", ""))' 2>/dev/null)
+  # A failed fork can still report a fresh id that was never written to disk.
+  if [ -n "$new_uuid" ] && [ "$new_uuid" != "$uuid" ] && [ -f "$PROJ_DIR/$new_uuid.jsonl" ]; then
     echo "[smart-resume] forked → $new_uuid" >&2
     echo "$new_uuid"
   else
@@ -108,7 +109,17 @@ fork_session() {
 RETRIES=0
 MAX_RETRIES=5
 while true; do
-  UUID=$(get_uuid)
+  # A failed lookup must not silently start a new conversation: retry it.
+  if ! UUID=$(get_uuid); then
+    RETRIES=$((RETRIES + 1))
+    echo "[smart-resume] could not tell which conversation to resume (${RETRIES}/${MAX_RETRIES})" >&2
+    if [ "$RETRIES" -ge "$MAX_RETRIES" ]; then
+      echo "[smart-resume] giving up rather than starting a new conversation; check: python3 $LIB_DIR/sessionlib.py resume-target '$SESSION_NAME'" >&2
+      break
+    fi
+    sleep 2
+    continue
+  fi
 
   if [ -n "$UUID" ] && has_active_bg_lock; then
     UUID=$(fork_session "$UUID")
@@ -134,8 +145,9 @@ while true; do
 
   # `sessionctl stop` drops this flag while it stops the session; without it a
   # stop within 10 s of a start looks like a failed launch and gets retried.
-  if [ -e "$HOME/.claude/session-locks/${SESSION_NAME}.stopping" ]; then
-    break
+  stop_flag="$HOME/.claude/session-locks/${SESSION_NAME}.stopping"
+  if [ -e "$stop_flag" ] && [ $(( $(date +%s) - $(stat -f %m "$stop_flag" 2>/dev/null || echo 0) )) -lt 120 ]; then
+    break   # fresh flag only: a stale one (sessionctl killed mid-stop) must not disable retries
   fi
 
   # If happy ran for more than 10s, assume the user exited deliberately → stop.

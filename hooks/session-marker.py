@@ -12,9 +12,10 @@ Skipped:
   - cwd is not exactly ~/claude-sessions/<name>
   - SESSION_MARKER_SKIP=1 (smart-resume's bg-lock fork)
   - transcript is not in this session's project dir (wrong config root)
-  - the Claude is not a descendant of the happy wrapper in the session's tmux
-    pane (forks, bg-agent jobs, cron `claude -p` in the same directory); for
-    panes without happy, a Claude in the pane that is not `-p/--print`
+  - the Claude is not the session's main claude, i.e. not started directly by
+    the launcher or the happy wrapper in the session's pane (forks, bg-agent
+    jobs, `claude -p` from a tool shell or cron); for panes without happy, a
+    Claude in the pane that is not `-p/--print`
   - the session id belongs to a bg-agent job
 Never blocks the session: any error exits 0.
 """
@@ -47,9 +48,12 @@ def decide(payload, claude_pid, env, sl):
     if procs is None:
         return None, "no tmux session"
     if procs.happy:
-        main = {pid for wrapper in procs.happy for pid in sl.descendants(table, wrapper)}
-        if claude_pid not in main:
-            return None, "not under the session's happy wrapper"
+        # procs.claude holds only claude started by the launcher (local mode) or
+        # by the happy wrapper (remote mode). A `claude -p` run from one of the
+        # session's tool shells also descends from the wrapper, so "descendant"
+        # is not enough.
+        if claude_pid not in procs.claude:
+            return None, "not the session's main claude"
     else:
         command = table.get(claude_pid, (0, ""))[1]
         in_pane = claude_pid in sl.descendants(table, procs.pane_pid)

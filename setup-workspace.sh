@@ -111,16 +111,24 @@ VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
 mkdir -p "$(dirname "$VSCODE_SETTINGS")"
 
 python3 - "$VSCODE_SETTINGS" "$INSTALL_DIR/bin/claude-session" << 'PYTHON'
-import json, sys, os, tempfile
+import json, sys, os, shutil, tempfile
 
 settings_path = sys.argv[1]
 claude_session_bin = sys.argv[2]
 
+real_path = os.path.realpath(settings_path)   # a symlinked settings file stays a symlink
 try:
-    with open(settings_path) as f:
-        settings = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    settings = {}
+    with open(real_path) as f:
+        original_text = f.read()
+    settings = json.loads(original_text)
+except FileNotFoundError:
+    original_text, settings = None, {}
+except json.JSONDecodeError as exc:
+    # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
+    # file we could not read with {}: skip this step and say so.
+    print(f"  ⚠ {settings_path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
+    sys.exit(0)
+before = json.loads(original_text) if original_text else {}
 
 changed = False
 
@@ -153,11 +161,15 @@ if profiles.get("Happy Session") != happy_profile:
     changed = True
 
 if changed:
-    dir_ = os.path.dirname(settings_path)
-    with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
-        json.dump(settings, tf, indent=2, ensure_ascii=False)
-        tmp_path = tf.name
-    os.replace(tmp_path, settings_path)
+    if settings != before:
+        if original_text is not None:
+            with open(real_path + ".bak-setup", "w") as f:
+                f.write(original_text)
+        with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
+            json.dump(settings, tf, indent=2, ensure_ascii=False)
+        if original_text is not None:
+            shutil.copymode(real_path, tf.name)
+        os.replace(tf.name, real_path)
     print("  VS Code settings updated")
 else:
     print("  VS Code settings already configured")
@@ -192,19 +204,34 @@ info "Removing the retired task-loop Stop hook (if present)..."
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
 python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
-import json, sys, os, tempfile
+import json, sys, os, shutil, tempfile
 path = sys.argv[1]
+real_path = os.path.realpath(path)   # a symlinked settings file stays a symlink
 try:
-    settings = json.load(open(path))
-except (json.JSONDecodeError, FileNotFoundError):
-    settings = {}
+    with open(real_path) as f:
+        original_text = f.read()
+    settings = json.loads(original_text)
+except FileNotFoundError:
+    original_text, settings = None, {}
+except json.JSONDecodeError as exc:
+    # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
+    # file we could not read with {}: skip this step and say so.
+    print(f"  ⚠ {path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
+    sys.exit(0)
+before = json.loads(original_text) if original_text else {}
 groups = settings.get("hooks", {}).get("Stop", [])
 for group in groups:
     group["hooks"] = [h for h in group.get("hooks", []) if not h.get("command", "").rstrip().endswith("hooks/loop.sh")]
 groups[:] = [g for g in groups if g.get("hooks")]
-with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False, suffix=".tmp") as tf:
-    json.dump(settings, tf, indent=2, ensure_ascii=False)
-os.replace(tf.name, path)
+if settings != before:
+    if original_text is not None:
+        with open(real_path + ".bak-setup", "w") as f:
+            f.write(original_text)
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
+        json.dump(settings, tf, indent=2, ensure_ascii=False)
+    if original_text is not None:
+        shutil.copymode(real_path, tf.name)
+    os.replace(tf.name, real_path)
 PYTHON
 ok "Task-loop Stop hook not installed"
 
@@ -215,16 +242,24 @@ cp "$REPO_DIR/tab-status/tab-status-poller.py" "$REPO_DIR/tab-status/tab-status.
 chmod +x ~/.claude/hooks/tab-status-poller.py ~/.claude/hooks/tab-status.sh
 
 python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
-import json, sys, os, tempfile
+import json, sys, os, shutil, tempfile
 
 settings_path = sys.argv[1]
 hook_sh = os.path.expanduser("~/.claude/hooks/tab-status.sh")
 
+real_path = os.path.realpath(settings_path)   # a symlinked settings file stays a symlink
 try:
-    with open(settings_path) as f:
-        settings = json.load(f)
-except (json.JSONDecodeError, FileNotFoundError):
-    settings = {}
+    with open(real_path) as f:
+        original_text = f.read()
+    settings = json.loads(original_text)
+except FileNotFoundError:
+    original_text, settings = None, {}
+except json.JSONDecodeError as exc:
+    # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
+    # file we could not read with {}: skip this step and say so.
+    print(f"  ⚠ {settings_path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
+    sys.exit(0)
+before = json.loads(original_text) if original_text else {}
 
 hooks = settings.setdefault("hooks", {})
 # event -> arg passed to tab-status.sh (see tab-status.sh for the states it sets)
@@ -237,22 +272,28 @@ wanted = {
 
 for event, arg in wanted.items():
     cmd = f"{hook_sh} {arg}"
-    groups = hooks.setdefault(event, [])
-    # drop any pre-existing tab-status.sh registration for this event (any arg),
-    # so re-running the installer after an arg/path change doesn't leave stale dupes
-    for group in groups:
-        group["hooks"] = [h for h in group.get("hooks", []) if "tab-status.sh" not in h.get("command", "")]
-    groups[:] = [g for g in groups if g.get("hooks")]
     entry = {"type": "command", "command": cmd, "timeout": 2}
     if event == "SessionStart":
         entry["async"] = True   # never delay session start for an emoji
+    groups = hooks.setdefault(event, [])
+    existing = [h for g in groups for h in g.get("hooks", []) if "tab-status.sh" in h.get("command", "")]
+    if existing == [entry]:
+        continue   # already exactly right: leave the layout alone
+    # otherwise drop every tab-status.sh registration (any arg / path) and add one
+    for group in groups:
+        group["hooks"] = [h for h in group.get("hooks", []) if "tab-status.sh" not in h.get("command", "")]
+    groups[:] = [g for g in groups if g.get("hooks")]
     groups.append({"matcher": "", "hooks": [entry]})
 
-dir_ = os.path.dirname(settings_path)
-with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
-    json.dump(settings, tf, indent=2, ensure_ascii=False)
-    tmp_path = tf.name
-os.replace(tmp_path, settings_path)
+if settings != before:
+    if original_text is not None:
+        with open(real_path + ".bak-setup", "w") as f:
+            f.write(original_text)
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
+        json.dump(settings, tf, indent=2, ensure_ascii=False)
+    if original_text is not None:
+        shutil.copymode(real_path, tf.name)
+    os.replace(tf.name, real_path)
 print("  tab-status hooks wired (UserPromptSubmit/Stop/Notification/SessionStart)")
 PYTHON
 
@@ -269,12 +310,21 @@ info "Installing sessionctl and session hooks..."
 mkdir -p ~/.local/bin
 ln -sf "$INSTALL_DIR/bin/sessionctl" ~/.local/bin/sessionctl
 python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks" << 'PYTHON'
-import json, sys, os, tempfile
+import json, sys, os, shutil, tempfile
 path, hook_dir = sys.argv[1], sys.argv[2]
+real_path = os.path.realpath(path)   # a symlinked settings file stays a symlink
 try:
-    settings = json.load(open(path))
-except (json.JSONDecodeError, FileNotFoundError):
-    settings = {}
+    with open(real_path) as f:
+        original_text = f.read()
+    settings = json.loads(original_text)
+except FileNotFoundError:
+    original_text, settings = None, {}
+except json.JSONDecodeError as exc:
+    # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
+    # file we could not read with {}: skip this step and say so.
+    print(f"  ⚠ {path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
+    sys.exit(0)
+before = json.loads(original_text) if original_text else {}
 hooks = settings.setdefault("hooks", {})
 
 def ensure(event, matcher, script, timeout):
@@ -298,9 +348,16 @@ print(ensure("SessionStart", "", f"{hook_dir}/session-marker.py", 5))
 # GNU-style pkill on macOS turned extra arguments into match patterns and
 # killed 186 processes on 2026-10-15.
 print(ensure("PreToolUse", "Bash", f"{hook_dir}/guard-pkill.py", 5))
-with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False, suffix=".tmp") as tf:
-    json.dump(settings, tf, indent=2, ensure_ascii=False)
-os.replace(tf.name, path)
+if settings != before:
+    if original_text is not None:
+        with open(real_path + ".bak-setup", "w") as f:
+            f.write(original_text)
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
+        json.dump(settings, tf, indent=2, ensure_ascii=False)
+    if original_text is not None:
+        shutil.copymode(real_path, tf.name)
+    os.replace(tf.name, real_path)
+
 PYTHON
 ok "sessionctl linked into ~/.local/bin; session hooks wired"
 

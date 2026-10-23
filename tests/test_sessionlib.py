@@ -108,6 +108,39 @@ class SessionlibTests(unittest.TestCase):
         transcript.write_text(message("hi") + error + message("ok, logged in"))
         self.assertFalse(self.sl.auth_error_pending("GCP"))        # user moved on
 
+    def test_marker_on_a_conversation_without_a_real_turn_is_not_resumed(self):
+        # /clear then nothing typed: the hook points the marker at an empty
+        # conversation; --resume on it fails, so fall back to the real one.
+        project = self.project("GCP")
+        (self.home / "claude-sessions" / "GCP").mkdir(parents=True)
+        real = "a" * 8 + "-1111-4111-8111-" + "1" * 12
+        empty = "b" * 8 + "-1111-4111-8111-" + "1" * 12
+        (project / f"{real}.jsonl").write_text(message("real work"))
+        (project / f"{empty}.jsonl").write_text(json.dumps({"type": "permission-mode"}) + "\n")
+        self.sl.write_marker("GCP", empty)
+        self.assertEqual(self.sl.resume_target("GCP"), real)
+
+    def test_effective_message_found_behind_a_large_tool_result_tail(self):
+        project = self.project("GCP")
+        path = project / "x.jsonl"
+        tail = json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "x" * 200000}]}}) + "\n"
+        path.write_text(message("the question") + tail * 30)   # ~6 MB of tool results after it
+        self.assertTrue(self.sl.has_effective_message(path))
+
+    def test_work_indicator_matches_current_spinner_and_subagent_rows(self):
+        busy = ["✻ Thinking… (12s · ↓ 3.4k tokens)", "· ↑ 120 tokens", "  ◯ general-purpose  Audit the diff",
+                "esc to interrupt"]
+        for text in busy:
+            self.assertTrue(self.sl.WORK_RE.search(text), text)
+        self.assertFalse(self.sl.WORK_RE.search("Done. ↓ see the summary below"))
+
+    def test_program_ignores_tool_shells_that_mention_claude(self):
+        self.assertEqual(self.sl.program("/bin/zsh -c ps ax | grep claude.exe"), "/bin/zsh")
+        self.assertEqual(self.sl.program("/x/bin/node --no-warnings /x/happy/dist/index.mjs --yolo"),
+                         "/x/happy/dist/index.mjs")
+        self.assertEqual(self.sl.program("/x/claude-code/bin/claude.exe --resume u"), "/x/claude-code/bin/claude.exe")
+
 
 if __name__ == "__main__":
     unittest.main()
