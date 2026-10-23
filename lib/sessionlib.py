@@ -367,6 +367,38 @@ def session_state(name, procs=None):
     return {"state": "idle", "reasons": [], "idle_since": last_write}
 
 
+def auth_error_pending(name, max_bytes=256 << 10):
+    """True if the live conversation's last turn is Claude Code's auth failure.
+
+    Claude Code records it as an assistant entry with isApiErrorMessage and
+    error "authentication_failed" ("Login expired · Please run /login").
+    Screen text alone can't tell that apart from a conversation *about* 401s.
+    """
+    uuid, _ = live_conversation(name)
+    if not uuid:
+        return False
+    path = conversation_file(name, uuid)
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            stream.seek(max(0, size - max_bytes))
+            lines = stream.read().splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except (ValueError, UnicodeError):
+            continue
+        if not isinstance(entry, dict) or entry.get("type") not in ("user", "assistant"):
+            continue
+        if entry.get("isMeta") or entry.get("isSidechain"):
+            continue
+        return bool(entry.get("type") == "assistant" and entry.get("isApiErrorMessage")
+                    and entry.get("error") == "authentication_failed")
+    return False
+
+
 # ── CLI for shell scripts (smart-resume.sh, hooks) ───────────────────────────
 
 def resume_target(name):
@@ -387,8 +419,17 @@ def _main(argv):
         print(resume_target(argv[2]) or "")
     elif len(argv) == 3 and argv[1] == "name-from-cwd":
         print(name_from_cwd(argv[2]) or "")
+    elif len(argv) == 3 and argv[1] == "auth-error":
+        return 0 if auth_error_pending(argv[2]) else 1
+    elif len(argv) == 4 and argv[1] == "write-marker":
+        # Only for an explicit user choice (claude-session NAME UUID).
+        name, uuid = argv[2], argv[3]
+        if not UUID_RE.fullmatch(uuid) or not conversation_file(name, uuid).exists():
+            print(f"no transcript for {uuid} in {name}", file=__import__("sys").stderr)
+            return 1
+        write_marker(name, uuid)
     else:
-        print("usage: sessionlib.py project-dir|resume-target|name-from-cwd ARG", file=__import__("sys").stderr)
+        print("usage: sessionlib.py project-dir|resume-target|name-from-cwd ARG | write-marker NAME UUID", file=__import__("sys").stderr)
         return 2
     return 0
 

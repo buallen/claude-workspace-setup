@@ -63,24 +63,15 @@ LIVE_NEEDLES=(
     "Invalid authentication credentials"
 )
 
-# DEAD = happy process actually gone from the tmux pane's process tree.
-# (The viewport "Press space to switch to local mode" text alone isn't
-# reliable — it may be a leftover frame from a previous happy exit while
-# the pane already has a fresh happy process running.)
-is_happy_alive() {
-    local sess="$1"
-    local pane_pid=$(tmux list-panes -t "$sess:0" -F '#{pane_pid}' 2>/dev/null | head -1)
-    [ -z "$pane_pid" ] && return 1
-    # Look for happy node process anywhere under the pane shell
-    pgrep -P "$pane_pid" 2>/dev/null | while read p; do
-        ps -p "$p" -o command 2>/dev/null | grep -q "bin/happy" && return 0
-        # Look one more level down
-        pgrep -P "$p" 2>/dev/null | while read q; do
-            ps -p "$q" -o command 2>/dev/null | grep -q "bin/happy" && return 0
-        done
-    done
-    pgrep -af "happy.*--resume" 2>/dev/null | grep -q "$sess\|/$sess/\|claude-sessions/$sess" && return 0
-    return 1
+SESSIONCTL="$HOME/.claude/claude-workspace/bin/sessionctl"
+
+# State from sessionctl (one implementation of "alive / busy"): stopped,
+# busy, background, waiting, idle or missing. The old is_happy_alive returned
+# from inside a pipeline subshell, so it answered "dead" for live sessions and
+# the DEAD branch typed `happy --yolo --resume` into running conversations.
+session_state() {
+    "$SESSIONCTL" status "$1" --json 2>/dev/null \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)[0]["state"])' 2>/dev/null
 }
 
 # Sync Chrome cookies to the path claude-reauth.py expects.
@@ -96,7 +87,7 @@ sync_cookies() {
 # Drive the in-session /login flow for a LIVE 401 session. Returns 0 on success.
 run_in_session_oauth() {
     local session="$1"
-    local target="$session:0"
+    local target="=$session:"   # "=" = exact match; names can be prefixes of others
 
     # happy may be in some intermediate modal state (e.g. "Press space again"
     # after a stray space keystroke). Send Esc twice to dismiss any open menu
@@ -150,11 +141,13 @@ run_in_session_oauth() {
     return 0
 }
 
-SESSIONS=$(tmux ls -F '#{session_name}' 2>/dev/null)
-[ -z "$SESSIONS" ] && exit 0
-
-for session in $SESSIONS; do
-    pane_content=$(tmux capture-pane -pt "$session:0" -S 0 -E - 2>/dev/null)
+# One name per line: names contain spaces ("Product priorities"), and the old
+# `for session in $SESSIONS` split them into words.
+while IFS= read -r session; do
+    [ -z "$session" ] && continue
+    # Claude prints an auth error just above its prompt; only the last lines
+    # count, so a conversation that merely talks about "401" is not a trigger.
+    pane_content=$(tmux capture-pane -p -t "=$session:" -S -15 2>/dev/null)
     [ -z "$pane_content" ] && continue
 
     matched_pattern=""
@@ -196,49 +189,36 @@ for session in $SESSIONS; do
         fi
     fi
 
-    # Classify: LIVE (happy process alive) vs DEAD (process gone, only screen leftover)
-    if ! is_happy_alive "$session"; then
-        log "$session: happy process gone — attempting auto-restart"
-        uuid_file="$HOME/claude-sessions/$session/.current-session"
-        if [ "$session" != "Personal" ] && [ ! -f "$uuid_file" ]; then
-            log "  $session: no .current-session file, can't restart"
-            if [ "$age" -gt "$COOLDOWN_SECONDS" ]; then
-                notify_lark "💀 $session 已退出 happy 进程且找不到 uuid。需手动 attach + restart。"
+    state=$(session_state "$session")
+    case "$state" in
+        stopped)
+            log "$session: happy/claude gone — restarting via sessionctl"
+            if "$SESSIONCTL" start "$session" >> "$LOG_FILE" 2>&1; then
+                notify_lark "🔄 $session 的 happy 已自动重新拉起（续接原对话）。"
+                date +%s > "$state_file"
+                rm -f "$fail_file"
+            else
+                log "  $session: restart FAILED"
+                current=$(cat "$fail_file" 2>/dev/null || echo 0)
+                echo $((current + 1)) > "$fail_file"
+                notify_lark "❌ $session happy 自动拉起失败，需手动检查（sessionctl status \"$session\"）。"
                 date +%s > "$state_file"
             fi
             continue
-        fi
-        uuid=""
-        if [ "$session" != "Personal" ]; then
-            uuid=$(cat "$uuid_file")
-        fi
-        # Send Enter to flush any leftover modal state from old happy frame
-        tmux send-keys -t "$session:0" Enter
-        sleep 1
-        # Personal session needs CLAUDE_CONFIG_DIR=~/.claude-private
-        if [ "$session" = "Personal" ]; then
-            private_command=$(printf '%q ' env "CLAUDE_CONFIG_DIR=$HOME/.claude-private" python3 "$HOME/.claude/claude-workspace/lib/personal_history.py" --launch happy)
-            tmux send-keys -t "$session:0" "$private_command" Enter
-        else
-            tmux send-keys -t "$session:0" "happy --yolo --resume $uuid" Enter
-        fi
-        sleep 20
-        if is_happy_alive "$session"; then
-            log "  $session: happy process up after restart"
-            notify_lark "🔄 $session happy 已自动 restart（uuid: ${uuid:0:8}...）。下次该 session 触发 API 调用即可恢复。"
-            date +%s > "$state_file"
-            rm -f "$fail_file"
-        else
-            log "  $session: restart FAILED — happy process didn't come up"
-            if [ -f "$fail_file" ]; then
-                current=$(cat "$fail_file" 2>/dev/null || echo 0)
-                echo $((current + 1)) > "$fail_file"
-            else
-                echo 1 > "$fail_file"
-            fi
-            notify_lark "❌ $session happy restart 失败。需手动检查。"
-            date +%s > "$state_file"
-        fi
+            ;;
+        idle|waiting)
+            ;;  # a session stuck on an auth error sits at its prompt
+        *)
+            log "$session: '$matched_pattern' on screen but session is ${state:-unknown} — not touching it"
+            continue
+            ;;
+    esac
+
+    # The screen is only a pre-filter: a conversation that discusses 401s (or
+    # shows this script) matches it too. Act only if Claude Code itself recorded
+    # an unanswered authentication_failed error as the conversation's last turn.
+    if ! python3 "$HOME/.claude/claude-workspace/lib/sessionlib.py" auth-error "$session"; then
+        log "$session: '$matched_pattern' on screen but no pending auth error in its transcript — not touching it"
         continue
     fi
 
@@ -267,4 +247,4 @@ for session in $SESSIONS; do
         new_fail=$(cat "$fail_file")
         notify_lark "❌ $session in-session reauth 失败（累计 ${new_fail}/${MAX_FAILURES} 次）。日志: $LOG_FILE"
     fi
-done
+done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)

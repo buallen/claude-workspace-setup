@@ -26,7 +26,7 @@ NVM_BIN="$HOME/.nvm/versions/node/$NODE_VER/bin"
 NVM_PREFIX="$HOME/.nvm/versions/node/$NODE_VER"
 CC_DIR="$NVM_PREFIX/lib/node_modules/@anthropic-ai/claude-code"
 CC_SYMLINK="/opt/homebrew/bin/claude"
-SMART_RESUME="$HOME/.claude/claude-workspace/bin/smart-resume.sh"
+SESSIONCTL="$HOME/.claude/claude-workspace/bin/sessionctl"
 # 名字不能叫 TMUX：tmux 用 $TMUX 环境变量定位 server socket，覆盖成二进制
 # 路径后，脚本里所有 tmux 命令都连不上 server（list-sessions 静默返回空）。
 TMUX_BIN="/opt/homebrew/bin/tmux"
@@ -241,91 +241,21 @@ while IFS= read -r sess; do
     continue
   fi
 
-  # marker 同步。真源是「project 目录里最后被写入的 .jsonl」，不是别的：
-  #
-  #  ✗ marker 文件本身 —— 它由「最后一个**退出**的对话」写入。同一 session 目录下
-  #    有并发对话时，先退出的那个会把 marker 覆盖成自己，活跃对话反而丢失。
-  #    2026-09-03 Workspace 就这样被一个并发对话把 marker 写成了 9aefee8f。
-  #  ✗ 进程命令行的 --resume —— 那是**启动时**的值。session 中途 /clear、/compact
-  #    或 smart-resume 的 fork 都会产生新对话 ID，命令行却永远不变。实测 Workspace
-  #    启动参数是 e8551729，而当时真正在写的已经是 f5c64b78。
-  #  ✓ 最新 mtime 的 jsonl —— 用户最后说话的那个对话，一定是最后被写入的那个文件。
-  #
-  # project 目录名是会话路径把 / . 空格 全部换成 -，如
-  # "/Users/kan.lu/claude-sessions/API Platform" → "-Users-kan-lu-claude-sessions-API-Platform"
-  if [ "$sess" = "Personal" ]; then proj_base="$HOME/.claude-private/projects"
-  else proj_base="$HOME/.claude/projects"; fi
-  proj_slug=$(echo "$HOME/claude-sessions/$sess" | sed 's|[/. ]|-|g')
-  newest_jsonl=$(ls -t "$proj_base/$proj_slug"/*.jsonl 2>/dev/null | head -1)
-  if [ -n "$newest_jsonl" ]; then
-    live_uuid=$(basename "$newest_jsonl" .jsonl)
-  else
-    # 兜底：project 目录还不存在（全新 session）时退回启动参数
-    live_uuid=$(ps -o command= -p "$pid" 2>/dev/null | tr '\n' ' ' \
-                | grep -oE '\-\-resume [0-9a-f-]{36}' | awk '{print $2}')
-  fi
-  marker_file="$HOME/claude-sessions/$sess/.current-session"
-  if [ -n "$live_uuid" ] && [ "$live_uuid" != "$(cat "$marker_file" 2>/dev/null | tr -d '[:space:]')" ]; then
-    echo "$live_uuid" > "$marker_file"
-    log "   $sess — marker 已同步为 $live_uuid"
-  fi
-
+  # 重启统一交给 sessionctl（2026-10-23 起）：按 happy 需要的顺序停止（先 happy、
+  # 再清孤儿 launcher/claude，不留残留）、修复 pane 的终端模式、用 respawn-pane 拉起
+  # （不往 pane 里敲字，所以不会再出现「命令被还活着的 TUI 吃掉、要重发」），
+  # 并与 watchdog 共用每个会话一把锁。续接哪个对话由 SessionStart hook 维护的
+  # marker 决定，sessionctl stop 也会按 happy 日志对齐一次，这里不再自己同步。
+  # 不加 --force：上面的闸放行后，sessionctl 还会再检查是否有工具命令在跑。
   log "▶  $sess — 重启中 (pid=$pid)"
-  kill -TERM "$pid" 2>/dev/null
-  for i in $(seq 1 "$KILL_WAIT"); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-  if kill -0 "$pid" 2>/dev/null; then
-    log "❌ $sess — ${KILL_WAIT}s 未退出，放弃（不强杀，避免留下半死状态）"
-    FAILED+=("$sess(未退出)")
-    continue
-  fi
-  # 等 pane 真的回落到 shell 再发命令。
-  #
-  # ⚠️ 这里原本是固定的 `sleep 3`，赌 happy 包装层会在 claude.exe 死后 3 秒内退出。
-  # 2026-10-20 04:02 赌输了一次：Product priorities 的 transcript 有 128MB（全机最大），
-  # happy 收尾（SESSION_SCANNER 全量重读 + 上报）慢，claude.exe 死后它又活了约 5 秒。
-  # send-keys 在 04:02:02 发出，happy 04:02:03 才退出 —— 命令被还活着的 TUI 吃掉，
-  # pane 随后回落到 shell 但命令已经丢了，该会话空置了 7.5 小时直到人工发现。
-  # kill 的是 claude.exe（build_claude_map 只找这个），happy 是否跟着退出不受我们控制，
-  # 所以只能等 pane_current_command 变回 shell，不能靠猜时间。
-  for i in $(seq 1 "$SHELL_WAIT"); do
-    cur=$("$TMUX_BIN" display-message -p -t "$sess" '#{pane_current_command}' 2>/dev/null)
-    case "$cur" in zsh|-zsh|bash|-bash|sh|login) break ;; esac
-    sleep 1
-  done
-  if [ "$i" -ge "$SHELL_WAIT" ]; then
-    log "⚠ $sess — ${SHELL_WAIT}s 后 pane 仍是 '$cur'，send-keys 可能被 TUI 吃掉"
-  fi
-
-  # Personal 的对话在 ~/.claude-private/projects/，不带这个变量会去默认目录找，
-  # 报 No conversation found 后重试 5 次放弃。
-  extra=""
-  [ "$sess" = "Personal" ] && extra="CLAUDE_CONFIG_DIR=$HOME/.claude-private "
-  "$TMUX_BIN" send-keys -t "$sess" "${extra}$SMART_RESUME '$sess'" Enter
-
-  # 验证真的起来了。BOOT_WAIT=30 对正常启动绰绰有余（376 次历史重启：中位 7s、
-  # p90 8s、最大 16s、超过 20s 的 0 次），所以超时基本等于「命令压根没送达」，
-  # 而不是「启动慢」—— 这种情况重发一次就能救回来，比留个空会话到天亮划算。
-  ok=0
-  for attempt in 1 2; do
-    for i in $(seq 1 "$BOOT_WAIT"); do
-      sleep 1
-      build_claude_map
-      newpid=$(find_claude_pid "$sess")
-      if [ -n "$newpid" ] && [ "$newpid" != "$pid" ]; then ok=1; break; fi
-    done
-    [ $ok = 1 ] && break
-    if [ "$attempt" = 1 ]; then
-      log "⚠ $sess — ${BOOT_WAIT}s 内没起来，重发一次 smart-resume"
-      "$TMUX_BIN" send-keys -t "$sess" "${extra}$SMART_RESUME '$sess'" Enter
-    fi
-  done
-  if [ $ok = 1 ]; then
-    log "✅ $sess — 已起来 (pid=$newpid)"
-    RESTARTED+=("$sess")
-  else
-    log "❌ $sess — 重发后仍未启动（共等 $((BOOT_WAIT * 2))s）"
-    FAILED+=("$sess(未启动)")
-  fi
+  "$SESSIONCTL" restart "$sess" >> "$LOG_FILE" 2>&1
+  rc=$?
+  case $rc in
+    0)  log "✅ $sess — 已重启"; RESTARTED+=("$sess") ;;
+    3)  log "⏭  $sess — sessionctl 判定忙（有工具命令在跑），跳过"; SKIPPED_BUSY+=("$sess") ;;
+    75) log "⏭  $sess — 另一个 sessionctl 正在处理（锁），跳过"; SKIPPED_BUSY+=("$sess") ;;
+    *)  log "❌ $sess — sessionctl restart 失败（退出码 $rc）"; FAILED+=("$sess(rc=$rc)") ;;
+  esac
 done < <("$TMUX_BIN" list-sessions -F '#{session_name}' 2>/dev/null | sort)
 
 # ── 汇总 ──────────────────────────────────────────────────────────────────
@@ -362,7 +292,7 @@ fi
 # 判据本身没法自动验证，这行提醒的作用是触发人去做一次「1 跑 3 闲」的对照实验。
 if [ $DRY_RUN = 0 ] && [ ${#RESTARTED[@]} -gt 0 ]; then
   gate_restarts=$(grep -c '已起来 (pid=' "$LOG_FILE" 2>/dev/null) || gate_restarts=0
-  gate_skips=$(grep -c '⏭ .* 跳过' "$LOG_FILE" 2>/dev/null) || gate_skips=0
+  gate_skips=$(grep -c '⏭.*跳过' "$LOG_FILE" 2>/dev/null) || gate_skips=0
   if [ "$gate_restarts" -ge 60 ] && [ "$gate_skips" -eq 0 ]; then
     log "⚠ 闸失效自检：累计 ${gate_restarts} 次重启、0 次跳过，闸可能又对不上 UI 了"
     notify "⚠️ nightly 安全闸可能已失效：累计 ${gate_restarts} 次重启但 0 次跳过。

@@ -2,7 +2,7 @@
 """sessionctl - one way to inspect, start, stop and restart workspace sessions.
 
   sessionctl status [NAME] [--json]     state, conversation and processes
-  sessionctl start NAME                 start the agent in the session's pane (no-op if running)
+  sessionctl start NAME [--no-wait]     start the agent in the session's pane (no-op if running)
   sessionctl stop NAME [--force]        stop happy + claude cleanly, leave the pane at a shell
   sessionctl restart NAME [--force]     stop + start under one lock
   sessionctl idle [--hours N] [--json]  sessions idle (or waiting for input) for N+ hours
@@ -212,7 +212,7 @@ def _stop_processes(name, happy, claude, launcher):
     return OK
 
 
-def start(name):
+def start(name, wait=True):
     directory = sl.session_dir(name)
     if not directory.is_dir():
         log(f"✗ {name}: {directory} does not exist")
@@ -238,6 +238,9 @@ def start(name):
         if code != 0:
             log(f"✗ {name}: tmux respawn-pane failed")
             return ERROR
+    if not wait:
+        log(f"→ {name}: launched")
+        return OK
     deadline = time.time() + START_WAIT
     while time.time() < deadline:
         procs = sl.session_procs(name)
@@ -315,6 +318,8 @@ def main(argv=None):
         p = sub.add_parser(cmd); p.add_argument("name")
         if cmd != "start":
             p.add_argument("--force", action="store_true")
+        else:
+            p.add_argument("--no-wait", action="store_true", help="return as soon as the pane is launched")
     args = parser.parse_args(argv)
 
     if args.cmd == "status":
@@ -322,7 +327,7 @@ def main(argv=None):
     if args.cmd == "idle":
         return cmd_idle(args)
     if args.cmd == "start":
-        return with_lock(args.name, lambda: start(args.name))
+        return with_lock(args.name, lambda: start(args.name, wait=not args.no_wait))
     if args.cmd == "stop":
         return with_lock(args.name, lambda: stop(args.name, args.force))
     return with_lock(args.name, lambda: stop(args.name, args.force) or start(args.name))

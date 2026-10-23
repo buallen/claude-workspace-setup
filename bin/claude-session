@@ -130,36 +130,56 @@ pane_has_other_child() {
 enforce_personal_private_config
 sync_personal_private_auth
 
-if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+# happy sessions are started and relaunched by sessionctl (respawn-pane, no
+# typing into the pane). The only exception is Personal with an explicit
+# conversation id, which personal_history.py has to select itself.
+USE_SESSIONCTL=0
+if [ "$LAUNCHER" = "happy" ] && { [ "$SESSION_NAME" != "Personal" ] || [ -z "$SESSION_ID" ]; }; then
+  USE_SESSIONCTL=1
+fi
+# `=name` targets match exactly; plain names prefix-match ("Product" -> "Product priorities").
+TARGET="=$SESSION_NAME:"
+
+# Replace the pane's idle shell with CMD. From inside that pane, run it in place.
+relaunch_in_pane() {
+  local cmd="$1"
+  if [ -n "${TMUX_PANE:-}" ] && [ "$TMUX_PANE" = "$(tmux display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)" ]; then
+    stty sane 2>/dev/null || true
+    exec /bin/bash -c "$cmd"
+  fi
+  tmux respawn-pane -k -t "$TARGET" -c "$(session_dir "$SESSION_NAME")" "stty sane 2>/dev/null; $cmd; exec /bin/zsh -l"
+}
+
+# An explicit conversation id for a happy session is the user's choice: record it
+# so smart-resume resumes it (the SessionStart hook keeps it current afterwards).
+if [ "$USE_SESSIONCTL" = 1 ] && [ -n "$SESSION_ID" ]; then
+  python3 "$REPO_DIR/lib/sessionlib.py" write-marker "$SESSION_NAME" "$SESSION_ID" \
+    || echo "Warning: session '$SESSION_ID' not found for $SESSION_NAME - resuming the current one" >&2
+fi
+
+if ! tmux has-session -t "=$SESSION_NAME" 2>/dev/null; then
   SESSION_DIR="$(session_dir "$SESSION_NAME")"
   ensure_session_dir "$SESSION_NAME"
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
   ENV_PREFIX="$(session_env_prefix)"
+  RESTORE_CMD="$(restore_launcher)"
 
-  if [ "$SESSION_NAME" = "Personal" ]; then
-    SESSION_CMD="$(personal_launch_command)"
-    RESTORE_CMD="$(restore_launcher)"
-  elif [ "$LAUNCHER" = "happy" ]; then
-    # smart-resume: auto-detects bg-agent lock, forks if needed, retries on quick exit
-    # Quote $SESSION_NAME so names with spaces (e.g. "Beep delivery") reach
-    # smart-resume.sh as a single $1 arg, not word-split into $1/$2.
-    SESSION_CMD="${ENV_PREFIX}bash -c $(printf '%q ' "$SCRIPT_DIR/smart-resume.sh \"$SESSION_NAME\"")"
-    RESTORE_CMD="$(restore_launcher)"
-  elif [ -n "$RESOLVED_SESSION_ID" ]; then
-    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
-    RESTORE_CMD="$(restore_launcher)"
+  if [ "$USE_SESSIONCTL" = 1 ]; then
+    "$SCRIPT_DIR/sessionctl" start "$SESSION_NAME" --no-wait || exit 1
   else
-    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --continue)"
-    RESTORE_CMD="$(restore_launcher)"
-  fi
-
-  # 命令退出（Ctrl-C 退 Claude / smart-resume break）后回落到交互 shell，
-  # 保住 tmux 窗口——否则窗口即 session 一起消失，otty tab 也会被连带关闭。
-  SESSION_CMD+="; exec /bin/zsh -l"
-
-  if ! tmux new-session -d -s "$SESSION_NAME" -n "${SESSION_NAME} 💤" -c "$SESSION_DIR" "$SESSION_CMD"; then
-    echo "Error: failed to create tmux session '$SESSION_NAME'" >&2
-    exit 1
+    if [ "$SESSION_NAME" = "Personal" ]; then
+      SESSION_CMD="$(personal_launch_command)"
+    elif [ -n "$RESOLVED_SESSION_ID" ]; then
+      SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
+    else
+      SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --continue)"
+    fi
+    # 命令退出（Ctrl-C 退 Claude）后回落到交互 shell，保住 tmux 窗口——否则窗口即
+    # session 一起消失，otty tab 也会被连带关闭。
+    if ! tmux new-session -d -s "$SESSION_NAME" -n "${SESSION_NAME} 💤" -c "$SESSION_DIR" "$SESSION_CMD; exec /bin/zsh -l"; then
+      echo "Error: failed to create tmux session '$SESSION_NAME'" >&2
+      exit 1
+    fi
   fi
 
   RESTORE_SESSION_ID="$RESOLVED_SESSION_ID"
@@ -172,26 +192,29 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
 else
   echo "Restored session: $SESSION_NAME"
   # 窗口可能已回落到 fallback shell（happy/claude 退出后 exec zsh 保住了 tab）。
-  # 此时只 attach 会进到一个空壳 shell——若 pane 无子进程，先自动重新拉起。
-  # 用 ps 查真实 ppid 列表（pgrep -P 在沙箱中会漏掉其他 pane 的子进程）。
-  # 若命令正从目标 pane 的 fallback shell 执行，忽略本次 happy-session 调用自身
-  # 的进程链；否则它会被误当成仍在运行的 agent，导致只打印 Restored 而不重拉。
-  PANE_PID="$(tmux list-panes -t "$SESSION_NAME" -F '#{pane_pid}' 2>/dev/null | head -1)"
+  # 此时只 attach 会进到一个空壳 shell——若 pane 无子进程，先重新拉起。
+  # 用 ps 查真实 ppid 列表（pgrep -P 在沙箱中会漏掉其他 pane 的子进程），
+  # 并忽略本次调用自身的进程链（从目标 pane 的 fallback shell 执行时）。
+  PANE_PID="$(tmux list-panes -t "$TARGET" -F '#{pane_pid}' 2>/dev/null | head -1)"
   if [ -n "$PANE_PID" ] && ! pane_has_other_child "$PANE_PID"; then
-    if [ "$SESSION_NAME" = "Personal" ]; then
-      RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
-      tmux send-keys -t "$SESSION_NAME" "$(personal_launch_command)" Enter
-    elif [ "$LAUNCHER" = "happy" ]; then
-      tmux send-keys -t "$SESSION_NAME" "$SCRIPT_DIR/smart-resume.sh $(printf '%q' "$SESSION_NAME")" Enter
+    echo "Relaunching agent in idle pane: $SESSION_NAME"
+    if [ "$USE_SESSIONCTL" = 1 ]; then
+      if [ -n "${TMUX_PANE:-}" ] && [ "$TMUX_PANE" = "$(tmux display-message -p -t "$TARGET" '#{pane_id}' 2>/dev/null)" ]; then
+        # Running inside that very pane: respawn-pane would kill this shell, so start in place.
+        stty sane 2>/dev/null || true
+        exec /bin/bash "$SCRIPT_DIR/smart-resume.sh" "$SESSION_NAME"
+      fi
+      "$SCRIPT_DIR/sessionctl" start "$SESSION_NAME" --no-wait || exit 1
+    elif [ "$SESSION_NAME" = "Personal" ]; then
+      relaunch_in_pane "$(personal_launch_command)"
     else
       RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
       if [ -n "$RESOLVED_SESSION_ID" ]; then
-        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --resume $RESOLVED_SESSION_ID" Enter
+        relaunch_in_pane "$(session_env_prefix)$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
       else
-        tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --continue" Enter
+        relaunch_in_pane "$(session_env_prefix)$(printf '%q ' claude --dangerously-skip-permissions --continue)"
       fi
     fi
-    echo "Relaunched agent in idle pane: $SESSION_NAME"
   fi
 fi
 

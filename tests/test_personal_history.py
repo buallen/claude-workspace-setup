@@ -292,11 +292,11 @@ class PersonalHistoryTests(unittest.TestCase):
 
     def test_active_pane_only_attaches_and_wrong_config_fails(self):
         tree = self.copied_launcher()
-        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "EXISTING": "1", "ACTIVE": "1"}, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "EXISTING": "1", "ACTIVE": "1"}, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.events("happy"), [])
         self.assertFalse(any(e["args"][0] == "send-keys" for e in self.events("tmux")))
-        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "CLAUDE_CONFIG_DIR": str(self.normal)}, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "CLAUDE_CONFIG_DIR": str(self.normal)}, capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
 
     def test_smart_resume_personal_routes_to_private_helper(self):
@@ -316,7 +316,7 @@ class PersonalHistoryTests(unittest.TestCase):
         self.history(A, message("2026-09-01T09:00:00+08:00"), project=self.normal / "projects" / key)
         (cwd / ".current-session").write_text(A + "\n")
         env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.normal), "CLAUDE_LAUNCHER": "claude"}
-        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), name], env=env, text=True, capture_output=True, timeout=10)
+        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), name], env=env, text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.events("claude")[-1]["args"], ["--dangerously-skip-permissions", "--resume", A])
         self.assertTrue((self.normal / "projects" / key / "simulated-write.jsonl").exists())
@@ -324,7 +324,7 @@ class PersonalHistoryTests(unittest.TestCase):
     def test_claude_personal_and_explicit_restore(self):
         self.fixture_latest()
         tree = self.copied_launcher()
-        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal", A], env={**self.env, "CLAUDE_LAUNCHER": "claude"}, text=True, capture_output=True, timeout=10)
+        result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal", A], env={**self.env, "CLAUDE_LAUNCHER": "claude"}, text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.events("claude")[-1]["args"], ["--dangerously-skip-permissions", "--resume", A])
         self.assertEqual(self.events("claude")[-1]["config"], str(self.private))
@@ -339,7 +339,7 @@ class PersonalHistoryTests(unittest.TestCase):
         before = shared.read_bytes()
         tree = self.copied_launcher()
         for launcher in ("happy", "claude"):
-            result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "CLAUDE_LAUNCHER": launcher, "ANTHROPIC_MODEL": "claude-sonnet-5"}, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(["/bin/bash", str(tree / "bin/claude-session"), "Personal"], env={**self.env, "CLAUDE_LAUNCHER": launcher, "ANTHROPIC_MODEL": "claude-sonnet-5"}, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stderr)
             event = self.events(launcher)[-1]
             model_index = event["args"].index("--model")

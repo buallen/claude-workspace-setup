@@ -97,9 +97,9 @@ resolve_session_id() {
 attach_or_switch() {
   local session_name="$1"
   if [ -n "${TMUX:-}" ]; then
-    exec tmux switch-client -t "$session_name"
+    exec tmux switch-client -t "=$session_name"
   else
-    exec tmux attach -t "$session_name"
+    exec tmux attach -t "=$session_name"
   fi
 }
 

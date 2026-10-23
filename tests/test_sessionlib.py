@@ -21,10 +21,13 @@ class SessionlibTests(unittest.TestCase):
         self.old_home = os.environ.get("HOME")
         os.environ["HOME"] = str(self.home)
         os.environ.pop("SESSION_ROOT", None)
+        # A private, empty tmux server: never read the real sessions (one is called GCP).
+        os.environ["SESSIONLIB_TMUX_SOCKET"] = f"sessionlib-unittest-{os.getpid()}"
         import sessionlib
         self.sl = importlib.reload(sessionlib)
 
     def tearDown(self):
+        os.environ.pop("SESSIONLIB_TMUX_SOCKET", None)
         if self.old_home is not None:
             os.environ["HOME"] = self.old_home
         self.tmp.cleanup()
@@ -88,6 +91,22 @@ class SessionlibTests(unittest.TestCase):
         self.sl.write_marker("GCP", uuid)
         self.assertEqual(self.sl.read_marker("GCP"), uuid)
         self.assertEqual(list(self.sl.marker_path("GCP").parent.glob(".current-session.*.tmp")), [])
+
+    def test_auth_error_pending_only_when_it_is_the_last_turn(self):
+        project = self.project("GCP")
+        (self.home / "claude-sessions" / "GCP").mkdir(parents=True)
+        uuid = "a" * 8 + "-1111-4111-8111-" + "1" * 12
+        error = json.dumps({"type": "assistant", "isApiErrorMessage": True, "error": "authentication_failed",
+                            "message": {"role": "assistant", "content": [{"type": "text", "text": "Login expired · Please run /login"}]}}) + "\n"
+        talk = json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "API Error: 401 means Please run /login"}}) + "\n"
+        transcript = project / f"{uuid}.jsonl"
+        self.sl.write_marker("GCP", uuid)
+        transcript.write_text(message("hi") + talk)
+        self.assertFalse(self.sl.auth_error_pending("GCP"))        # only talking about it
+        transcript.write_text(message("hi") + error)
+        self.assertTrue(self.sl.auth_error_pending("GCP"))         # real, unanswered
+        transcript.write_text(message("hi") + error + message("ok, logged in"))
+        self.assertFalse(self.sl.auth_error_pending("GCP"))        # user moved on
 
 
 if __name__ == "__main__":

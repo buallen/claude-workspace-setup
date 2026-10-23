@@ -140,5 +140,9 @@ check "idle --hours 24 lists the long-idle session" '[ $rc -eq 0 ]'
 "${SC[@]}" idle --hours 20000 --json | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin)==[] else 1)"; rc=$?
 check "idle --hours 20000 lists nothing" '[ $rc -eq 0 ]'
 
+# 11. nothing starts an agent by typing into a pane any more
+leftover="$(grep -rnE 'send-keys.*(happy --yolo|smart-resume|personal_history|claude --dangerously)' "$REPO/bin" "$REPO/ops" "$REPO/lib" "$REPO/hooks" 2>/dev/null)"
+check "no launcher typed into a pane with send-keys" '[ -z "$leftover" ]'
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
