@@ -80,7 +80,7 @@ session_state() {
 
 # Sync Chrome cookies to the path claude-reauth.py expects.
 sync_cookies() {
-    python3 /Users/kan.lu/bin/export-chrome-cookies.py >/dev/null 2>&1
+    python3 "$HOME/bin/export-chrome-cookies.py" >/dev/null 2>&1
     if [ -f /tmp/playwright-cookies.json ]; then
         cp /tmp/playwright-cookies.json /tmp/claude-cookies.json
         return 0
@@ -124,7 +124,7 @@ run_in_session_oauth() {
     fi
 
     log "  → $session: handing off to reauth.py -t $target"
-    if ! timeout 45 python3 /Users/kan.lu/bin/claude-reauth.py -t "$target" >> "$LOG_FILE" 2>&1; then
+    if ! timeout 45 python3 "$HOME/bin/claude-reauth.py" -t "$target" >> "$LOG_FILE" 2>&1; then
         log "  → $session: reauth.py failed"
         tmux send-keys -t "$target" Escape
         return 1

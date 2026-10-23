@@ -6,12 +6,13 @@ Re-run after every `happy update`.
 Fix: https://github.com/slopus/happy/pull/1337
 """
 import glob
+import os
 import sys
 import re
 
 targets = (
-    glob.glob("/Users/kan.lu/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.cjs")
-    + glob.glob("/Users/kan.lu/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.mjs")
+    glob.glob(os.path.expanduser("~/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.cjs"))
+    + glob.glob(os.path.expanduser("~/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.mjs"))
 )
 # Exclude backup files
 targets = [t for t in targets if not (t.endswith(".bak") or ".bak" in t)]

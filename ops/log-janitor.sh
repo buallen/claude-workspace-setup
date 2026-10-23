@@ -10,7 +10,7 @@
 
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export HOME="${HOME:-/Users/kan.lu}"
+export HOME="${HOME:-$(echo ~)}"
 export TZ="Asia/Singapore"
 
 LARK_CLI="/opt/homebrew/bin/lark-cli"
