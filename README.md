@@ -1,12 +1,15 @@
 # Claude Workspace Setup
 
-Persistent Claude Code / Happy Coder sessions for VS Code.
+Persistent, named Claude Code sessions on macOS that you can drive from the
+terminal and from your phone.
 
-This project installs a small set of shell commands that keep each named AI
-session inside tmux, restore VS Code terminal tabs after restart, and let each
-session pick its Claude backend (Anthropic, or GPT via a local proxy).
+Each session is a tmux session (`~/claude-sessions/<name>`) running Claude Code
+under [Happy](https://happy.engineering), shown as one tab in
+[Otty](https://otty.sh) (or VS Code). Sessions survive terminal restarts,
+resume the same conversation after an exit, and are managed by one command,
+`sessionctl`.
 
-## Install (one command)
+## Install
 
 ```bash
 git clone https://github.com/buallen/claude-workspace-setup.git ~/claude-workspace-setup && \
@@ -15,273 +18,165 @@ git clone https://github.com/buallen/claude-workspace-setup.git ~/claude-workspa
   happy-session "Workspace"
 ```
 
-That clones the repo, installs everything, reloads your shell, and drops you
-straight into your first persistent session — nothing left to configure by
-hand. Re-run just the middle line any time to pick up updates
-(`git -C ~/claude-workspace-setup pull && bash ~/claude-workspace-setup/setup-workspace.sh`);
-every step is idempotent.
+Every step is idempotent; re-run it to pick up updates
+(`git -C ~/claude-workspace-setup pull && bash ~/claude-workspace-setup/setup-workspace.sh`).
 
-The installer:
-
-- installs scripts under `~/.claude/claude-workspace/`
-- adds shell aliases to `~/.zshrc`
-- configures tmux title forwarding
-- configures VS Code terminal title + Restore Terminals
-- installs the Claude stop hook for `tasks.md` loops
-- installs the tab-status poller (emoji + backend indicator on every tab)
-
-Optional, after the above: `bash ~/claude-workspace-setup/bin/otty-setup` to
-also (or instead) use [Otty](https://otty.sh) — see [Otty](#otty-optional) below.
+The installer copies `bin/ lib/ hooks/ config/` to `~/.claude/claude-workspace/`,
+adds the shell aliases, configures tmux title forwarding, installs the
+tab-status poller, links `sessionctl` into `~/.local/bin`, and registers two
+Claude Code hooks (conversation marker, pkill guard). Then run
+`bin/otty-setup` once if you use Otty.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A["VS Code / Otty terminal tab"] --> B["shell alias<br/>happy-session · claude-session · codex-session"]
-    B --> C["bin/claude-session"]
-    C -->|"new session"| D["tmux new-session"]
-    C -->|"existing, pane fell back to an idle shell"| E["relaunch smart-resume.sh<br/>(ground truth: ps -eo ppid=, not pgrep -P)"]
-    D --> F
-    E --> F
-
-    F["bin/smart-resume.sh (loop)"] --> G{"bg-agent lock<br/>on this UUID?"}
-    G -->|yes| H["fork to a clean UUID"] --> I
-    G -->|no| I["happy --yolo --resume UUID"]
-
-    J["session-model CLI"] -.->|writes| K[".backend marker"]
-    K -.->|"re-read every loop iteration"| F
-
-    I --> L{"CLIProxyAPI :8317<br/>reachable?"}
-    L -->|no, degrade| M["Anthropic API — direct"]
-    L -->|yes| N["CLIProxyAPI"]
-    N -->|"claude-* models"| M
-    N -->|"gpt-5.6-sol"| O["ChatGPT / Codex"]
-
-    D -.->|"set-titles #W"| P["tmux window title"]
-    E -.-> P
-    P --> A
-
-    Q["tab-status-poller.py<br/>(launchd, every 5s)"] -->|rename-window| P
-    R["tab-status.sh hook<br/>(UserPromptSubmit / Stop / Notification / SessionStart)"] -->|state file| Q
+    T["Otty tab (one per session)"] -->|"~/.zprofile auto-attach"| X["tmux session &lt;name&gt;<br/>(keeps running when the terminal quits)"]
+    A["happy-session / claude-session"] -->|"create or relaunch"| S["sessionctl start"]
+    W["auth watchdog · nightly upgrade (launchd)"] --> R["sessionctl start / restart"]
+    S --> X
+    R --> X
+    X -->|"pane: stty sane; smart-resume.sh; exec zsh"| SR["smart-resume.sh<br/>resume target from sessionlib, bg-lock fork, retries"]
+    SR --> H["happy wrapper<br/>(phone sync, local ⇄ remote mode)"]
+    H --> L["claude_local_launcher"] --> C["claude"]
+    C -->|"writes"| J["~/.claude/projects/&lt;key&gt;/&lt;uuid&gt;.jsonl"]
+    C -->|"SessionStart hook"| M[".current-session<br/>(which conversation to resume)"]
+    H -->|"incremental read"| J
+    H <-->|"socket"| P["Happy server ⇄ phone app"]
+    D["happy daemon (one per machine)"] <--> P
+    TS["tab-status poller + hook"] -->|"window name 🔥🤖🫵💤"| X
 ```
 
-Two paths not shown above to keep it readable: `codex-session` follows the
-same alias → dispatch shape but into `tmux session "codex-Workspace"` running
-`happy codex` (no smart-resume loop, no proxy); `happy-session-private
-"Personal"` runs the same `claude-session` script with
-`CLAUDE_CONFIG_DIR=~/.claude-private`, keeping its transcripts and OAuth
-credential in a separate Keychain slot from every other session. See
-[How It Works](#how-it-works) for both as plain text.
+Who does what: Otty only displays, tmux keeps sessions alive, `sessionctl`
+starts/stops/restarts them, `smart-resume.sh` resumes the right conversation
+and retries, the happy wrapper syncs with the phone, and `claude` does the
+work. Details and the reasons behind each piece: [docs/architecture.md](docs/architecture.md).
 
 ## Commands
 
-Start or attach to a Happy session:
+```bash
+happy-session "GCP"                 # create or attach; relaunches an idle pane
+happy-session "GCP" <conversation>  # same, but resume that conversation
+happy-session-private "Personal"    # the one session with its own config root
+claude-session "GCP"                # plain Claude Code, no Happy
+end-session "GCP"                   # kill the tmux session
+codex-session "Workspace"           # `happy codex` in ~/codex-sessions/<name>
+
+sessionctl status [NAME] [--json]   # state, idle time, live conversation, processes
+sessionctl restart NAME [--force]   # clean stop + start on the same conversation
+sessionctl stop NAME [--force]      # stop the agent, keep the tab at a shell
+sessionctl start NAME               # start it again (no-op if running)
+sessionctl idle --hours 24          # sessions idle or waiting for 24 h+
+```
+
+`sessionctl` refuses to stop a busy session (tool command running, transcript
+written in the last 3 minutes, working indicator on screen, bg-agent job)
+unless `--force`, holds one lock per session (exit 75 if another caller has
+it), and only targets exact session names.
+
+## Session lifecycle, and why it is built this way
+
+- **Start without typing.** Agents are launched with `tmux respawn-pane`, not
+  by typing a command into the pane. A Claude that was killed leaves the pty
+  in raw mode; typed commands are then not submitted and a new Claude exits
+  at once. The pane command runs `stty sane` first.
+- **Stop in happy's order.** `SIGTERM` the happy wrapper and wait; it exits
+  without killing claude. Then stop the orphaned launcher before claude (the
+  launcher respawns a dead claude), then repair the pane's terminal mode.
+  Every signal is re-checked against the pid's start time and command line.
+- **One source for "which conversation".** Claude Code fires `SessionStart`
+  on startup, resume, `/clear` and `/compact`; `hooks/session-marker.py`
+  records the id in `~/claude-sessions/<name>/.current-session`, but only for
+  the Claude that descends from the session pane's happy wrapper (not forks,
+  bg-agent jobs or a one-off `claude -p` in the same directory). Everything
+  else reads the marker through `lib/sessionlib.py`.
+- **No auto-sleep.** A stopped session can be resumed from the phone, but
+  that starts a headless process outside tmux, and messages sent while it was
+  stopped are skipped. Idle sessions are reported instead (`sessionctl idle`,
+  daily via `ops/log-janitor.sh`).
+
+## Otty
 
 ```bash
-happy-session "GCP"
+bin/otty-setup                      # install Otty + font + theme, migrate sessions
+bin/otty-workspace                  # attach tabs for tmux sessions that have none
 ```
 
-Resume a specific Claude conversation in that named tab:
+Otty tab shells are login shells, so the auto-attach block lives in
+`~/.zprofile`: a shell started by Otty in `~/claude-sessions/<name>` attaches
+to tmux session `<name>`, creating it with `happy-session` if needed. Back up
+Otty's `state.db` before touching tabs; it is the only place tab order is
+stored (`ops/log-janitor.sh` keeps 7 daily copies).
+
+## Tab status
+
+`tab-status/tab-status-poller.py` (launchd, every 5 s) and the
+`tab-status.sh` hook keep each tmux window name, and so the terminal tab
+title, in sync: 🔥 working · 🤖 background job · 🫵 waiting for you · 💤 idle.
+The poller owns the working states (remote and background work fires no local
+hook); the hook owns the resting states.
+
+## Personal session
+
+`Personal` runs with `CLAUDE_CONFIG_DIR=~/.claude-private`, so its transcripts
+and OAuth credential stay separate from every other session (and out of
+anything that scans `~/.claude/projects`). `claude-session` refuses to start
+it without that config dir; `lib/personal_history.py` selects its conversation
+by the latest real message, never by file mtime.
+
+## Happy
+
+The CLI is the npm package `happy` (formerly `happy-coder`). Until
+[slopus/happy#1915](https://github.com/slopus/happy/pull/1915) ships, apply
+the incremental-scanner patch after every install or upgrade — without it each
+session re-reads its whole transcript every 3 seconds:
 
 ```bash
-happy-session "GCP" 5432a2e4-fc63-44de-86c5-7c9d318c7829
+python3 ops/patch-happy-scanner-incremental.py   # or ops/patch-happy.sh (all patches)
+sessionctl restart "<name>"                      # per session, to load it
 ```
 
-Use plain Claude instead of Happy:
+Note: on happy 1.2.5 every `happy` invocation, even `--version`, registers a
+session with the server.
+
+## Ops (optional, personal automation)
+
+`ops/` holds the launchd jobs this setup runs on its author's machine; review
+paths before installing them elsewhere. Private settings such as the Lark
+recipient go in `~/.config/claude-workspace/local.env` (not in git):
 
 ```bash
-claude-session "GCP"
+LARK_NOTIFY_USER_ID="ou_..."
 ```
 
-Switch a session's Claude backend (see "Per-session backend" below):
+- `claude-auth-watchdog.sh` (every 10 min): restarts a session whose agent
+  died, and runs the in-session `/login` flow only when the conversation's
+  last turn is Claude Code's own `authentication_failed` error.
+- `claude-nightly-upgrade.sh` (04:00): upgrades Claude Code, then
+  `sessionctl restart`s idle sessions running the old version.
+- `log-janitor.sh` (hourly): log rotation and disk watermarks; daily Otty
+  backup, idle-session report and a check that the happy patch is still in place.
 
-```bash
-session-model                 # list every session's backend
-session-model "GCP" claudex   # this session now talks to GPT-5.6 Sol
-session-model "GCP" claude    # back to Anthropic (default)
-```
-
-End a session and remove it from VS Code restore:
-
-```bash
-end-session "GCP"
-```
-
-Start or attach to a named Codex session:
-
-```bash
-codex-session "Workspace"
-codex-session "Workspace" <codex-session-id>
-```
-
-Codex sessions use `~/codex-sessions/<name>` as their fixed working folder and
-tmux session names like `codex-Workspace`, so they do not collide with
-Claude/Happy tabs named `Workspace`. The runner is `happy codex`.
-
-## Installed Aliases
-
-`setup-workspace.sh` manages this block in `~/.zshrc`:
-
-```zsh
-alias claude-session="~/.claude/claude-workspace/bin/claude-session"
-alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
-alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
-alias codex-session="~/.claude/claude-workspace/bin/codex-session"
-alias session-model="~/.claude/claude-workspace/bin/session-model"
-alias end-session="~/.claude/claude-workspace/bin/end-session"
-```
-
-## Otty (optional)
-
-Migrate the same tmux-managed sessions into [Otty](https://otty.sh) — a
-native, GPU-accelerated terminal — instead of (or alongside) VS Code:
-
-```bash
-bin/otty-setup                    # install Otty + font + Claude-styled theme, then migrate
-bin/otty-setup --theme claude-code  # use the dark variant
-bin/otty-setup --skip-font        # keep your existing font
-```
-
-`otty-setup` is idempotent (safe to re-run) and does not touch VS Code or
-`restoreTerminals` — it only installs/configures Otty, writes the
-`~/.zprofile` auto-attach block (Otty's tab shells are login shells that
-apparently don't load `~/.zshrc`, so this can't live there — see the script's
-header comment for the other three attach-related pitfalls it works around),
-and opens one Otty tab per existing tmux session, attaching to the session
-already running (or started via `happy-session`/`claude-session` above).
-Re-run `bin/otty-workspace` any time to attach newly created sessions without
-repeating install/config — it tells an already-attached pane apart from a
-disconnected/idle one by checking tmux's own process tree, not by trusting the
-(polled, can lag) tab title text.
-
-## Per-session Backend (claudex)
-
-Every session always routes through a local
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (`127.0.0.1:8317`)
-when it's reachable — Claude model requests forward straight through to your
-real Anthropic account (proxy holds its own Anthropic OAuth credential),
-OpenAI's GPT-5.6 Sol requests forward through your ChatGPT/Codex subscription.
-Because both live behind the same base URL, **`gpt-5.6-sol` shows up directly
-in every session's `/model` picker** (as a "Custom Haiku model") — no backend
-switch needed to try it once. If the proxy is down, `smart-resume.sh` falls
-back to a direct Anthropic connection for that launch; a dead local proxy
-degrades one launch, it doesn't take every session down with it.
-
-`session-model` / `claudex` only sets the *preferred default* for a session —
-which model launches active without you picking it from `/model` yourself,
-and (for `claudex`) whether subagents also default to GPT:
-
-```bash
-session-model                  # list all sessions and their backend preference
-session-model "GCP" claudex    # gpt-5.6-sol becomes GCP's preferred default
-# then exit Claude inside that session (exit / Ctrl+D):
-# smart-resume relaunches the SAME conversation with the new preference
-session-model "GCP" claude     # back to Anthropic's own default set; exit once again to apply
-```
-
-Claude Code reads its launch environment only at process start, so a
-preference change applies on the next launch — `smart-resume.sh` re-reads the
-marker on every loop iteration and relaunches immediately when it changes,
-which makes "one command + one exit" the whole flow. The marker is
-`~/claude-sessions/<name>/.backend`; the proxy API key is read from
-`/opt/homebrew/etc/cliproxyapi.conf` and never copied elsewhere.
-
-If a session ends up on the wrong model despite the preference marker (e.g.
-`/model` was confirmed with Enter instead of `s`, which sets it as the
-**global** default for all sessions, not just that one), pick the right model
-from `/model` again and confirm with `s` — session-scoped, not global.
-
-Setup for `claudex` (one-time): install CLIProxyAPI, bind it to
-`127.0.0.1:8317`, add an API key, then log in to both providers —
-`cliproxyapi -codex-login` for GPT and `cliproxyapi -claude-login` for the
-real-Anthropic passthrough — and start it with `brew services start
-cliproxyapi`.
-
-Caveat: a conversation that has grown near Claude's context limit may not fit
-the GPT model's smaller window — switching models then fails with a
-context-window 400. Run `/compact` on the Anthropic backend first, then switch.
-
-## Tab Status Indicators (`tab-status/`)
-
-A launchd-resident poller (`tab-status-poller.py`, every 5s) plus an
-edge-triggered hook (`tab-status.sh`, fired on `UserPromptSubmit`/`Stop`/
-`Notification`/`SessionStart`) keep each tmux window's title in sync with what
-that session is actually doing, forwarded to the terminal tab via `#W` + tmux
-`set-titles` — no VS Code/Otty-specific code needed, both just display the
-tmux window title:
-
-- 🔥 foreground working · 🤖 background job working · 🫵 waiting for input · 💤 idle
-- Backend prefix glyph, borrowed from each CLI's own spinner: ✻ spark = Claude,
-  ⠿ braille dots = GPT — animates while working, rests when idle. Ground truth
-  is the model name the session's own statusline is *currently* showing (it
-  self-reports via `~/.claude/statusline-model.sh`), not the `.backend`
-  preference file — those can disagree (a session with no `.backend` set can
-  still be actively running `gpt-5.6-sol` if that's what it resolved to).
-
-Division of labour: the poller owns the working overlay (🔥/🤖), fixing what
-edge-triggered hooks alone can't catch — sessions driven remotely (phone,
-agent-sdk) or by background jobs never fire `UserPromptSubmit` locally, so a
-hook-only setup would leave them stuck showing 🫵. The hook owns the resting
-states (🫵/💤).
-
-Installed by `setup-workspace.sh` Step 8: copies both files to `~/.claude/hooks/`,
-wires the four hook entries into `~/.claude/settings.json` (additive — existing
-hook groups for the same events are preserved), and loads
-`com.kanlu.tabstatus-poller.plist` via launchd. Re-running the installer is safe
-(re-copies, re-wires without duplicating, restarts the poller).
-
-## Personal Private Session
-
-`Personal` is the only session with private Claude state. When
-`happy-session-private Personal ...` starts, `claude-session` first runs
-`claude-auth-sync` to copy the newest Claude Code OAuth credential between the
-default macOS Keychain slot and `~/.claude-private`'s Keychain slot. The token
-is not printed. Transcript files remain strictly separate because the Claude
-process still runs with `CLAUDE_CONFIG_DIR=~/.claude-private`.
-
-## How It Works
+## Repository layout
 
 ```text
-VS Code terminal tab "GCP"
-  -> shell alias happy-session "GCP"
-  -> ~/.claude/claude-workspace/bin/claude-session
-  -> tmux session "GCP"
-  -> happy --yolo --continue or --resume <session-id>
-  -> cwd ~/claude-sessions/GCP
+bin/          sessionctl, claude-session, smart-resume.sh, otty-setup, otty-workspace, ...
+lib/          sessionlib.py (paths, processes, state, conversation), session.sh,
+              personal_history.py, vscode_restore.py
+hooks/        session-marker.py, guard-pkill.py, other Claude Code hooks
+tab-status/   tab emoji poller + hook + LaunchAgent
+ops/          launchd jobs and happy dist patches (optional)
+tests/        unit tests + verify-lifecycle.sh (isolated tmux, fake happy/claude)
 ```
 
-For Codex:
+## Tests
 
-```text
-VS Code terminal tab "Codex: Workspace"
-  -> codex-session "Workspace"
-  -> tmux session "codex-Workspace"
-  -> cwd ~/codex-sessions/Workspace
-  -> happy codex
-```
-
-## Repository Layout
-
-```text
-bin/                 user-facing commands
-lib/                 shared session and VS Code restore helpers
-hooks/               Claude Code hooks (installed into ~/.claude/claude-workspace/hooks/)
-tab-status/          emoji/backend tab indicator poller (installed into ~/.claude/hooks/, separate target dir)
-config/              default settings
-docs/                architecture notes
-setup-workspace.sh   one-command installer
-test-plan.md         manual/regression test checklist
+```bash
+python3 -m pytest tests -q          # unit tests
+bash tests/verify-lifecycle.sh      # sessionctl end to end on a private tmux server
 ```
 
 ## Requirements
 
-- macOS
-- Homebrew
-- tmux
-- VS Code and/or [Otty](https://otty.sh)
-- Claude Code CLI
-- Happy Coder
-- CLIProxyAPI (`brew install cliproxyapi`) — powers `session-model <name> claudex`
-  and, since every session always routes through it, is what makes `gpt-5.6-sol`
-  show up in `/model` at all. If it's not installed/running, sessions just fall
-  back to a direct Anthropic connection.
+macOS, Homebrew, tmux, Python 3, Node.js, Claude Code, Happy (`npm i -g happy`),
+and Otty or VS Code.

@@ -25,5 +25,7 @@ if [ -z "$SESSION_NAME" ]; then
   exit 1
 fi
 
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null && echo "Killed session: $SESSION_NAME" || echo "No running session: $SESSION_NAME"
+# Stop the agent in happy's order first (no orphaned claude), then drop tmux.
+"$SCRIPT_DIR/sessionctl" stop "$SESSION_NAME" --force >/dev/null 2>&1 || true
+tmux kill-session -t "=$SESSION_NAME" 2>/dev/null && echo "Killed session: $SESSION_NAME" || echo "No running session: $SESSION_NAME"
 python3 "$REPO_DIR/lib/vscode_restore.py" remove "$VSCODE_SETTINGS" "$SESSION_NAME"

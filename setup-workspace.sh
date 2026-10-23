@@ -185,48 +185,28 @@ else
   echo "  Cmd+Shift+P → 'Shell Command: Install code in PATH', then rerun this script"
 fi
 
-# ── Step 7: Configure L4 Stop Hook ──────────────────────────────────────────
-info "Configuring L4 Stop Hook in ~/.claude/settings.json..."
+# ── Step 7: Remove the retired task-loop Stop hook ──────────────────────────
+# hooks/loop.sh (block Stop while tasks.md has unchecked items) was taken out of
+# service on 2026-10-19; re-running the installer must not bring it back.
+info "Removing the retired task-loop Stop hook (if present)..."
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
-
-python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks/loop.sh" << 'PYTHON'
+python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
 import json, sys, os, tempfile
-
-settings_path = sys.argv[1]
-hook_cmd = sys.argv[2]
+path = sys.argv[1]
 try:
-    with open(settings_path) as f:
-        settings = json.load(f)
+    settings = json.load(open(path))
 except (json.JSONDecodeError, FileNotFoundError):
     settings = {}
-
-hooks = settings.setdefault("hooks", {})
-stop_hooks = hooks.setdefault("Stop", [])
-
-for group in stop_hooks:
-    group["hooks"] = [
-        h for h in group.get("hooks", [])
-        if h.get("command") not in {
-            os.path.expanduser("~/.claude/hooks/loop.sh"),
-            hook_cmd,
-        }
-    ]
-
-stop_hooks[:] = [group for group in stop_hooks if group.get("hooks")]
-stop_hooks.append({
-    "matcher": "",
-    "hooks": [{"type": "command", "command": hook_cmd, "timeout": 10, "statusMessage": "Checking task list..."}]
-})
-
-dir_ = os.path.dirname(settings_path)
-with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
+groups = settings.get("hooks", {}).get("Stop", [])
+for group in groups:
+    group["hooks"] = [h for h in group.get("hooks", []) if not h.get("command", "").rstrip().endswith("hooks/loop.sh")]
+groups[:] = [g for g in groups if g.get("hooks")]
+with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False, suffix=".tmp") as tf:
     json.dump(settings, tf, indent=2, ensure_ascii=False)
-    tmp_path = tf.name
-os.replace(tmp_path, settings_path)
-print("  Stop Hook configured")
+os.replace(tf.name, path)
 PYTHON
-ok "Stop Hook configured"
+ok "Task-loop Stop hook not installed"
 
 # ── Step 8: Install tab-status emoji/backend marker poller ──────────────────
 info "Installing tab-status poller..."
@@ -263,7 +243,10 @@ for event, arg in wanted.items():
     for group in groups:
         group["hooks"] = [h for h in group.get("hooks", []) if "tab-status.sh" not in h.get("command", "")]
     groups[:] = [g for g in groups if g.get("hooks")]
-    groups.append({"matcher": "", "hooks": [{"type": "command", "command": cmd}]})
+    entry = {"type": "command", "command": cmd, "timeout": 2}
+    if event == "SessionStart":
+        entry["async"] = True   # never delay session start for an emoji
+    groups.append({"matcher": "", "hooks": [entry]})
 
 dir_ = os.path.dirname(settings_path)
 with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as tf:
@@ -281,6 +264,46 @@ ok "tab-status poller installed and (re)started"
 echo "  依赖 tmux \`set-titles\` 转发（Step 3 已配置）；标签图标需要终端把 tmux 窗口名当标题显示"
 echo "  （Otty: privilege-title-shell=true 默认开；VS Code: Step 5 已设 terminal.integrated.tabs.title）"
 
+# ── Step 9: sessionctl, conversation-marker hook, pkill guard ───────────────
+info "Installing sessionctl and session hooks..."
+mkdir -p ~/.local/bin
+ln -sf "$INSTALL_DIR/bin/sessionctl" ~/.local/bin/sessionctl
+python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks" << 'PYTHON'
+import json, sys, os, tempfile
+path, hook_dir = sys.argv[1], sys.argv[2]
+try:
+    settings = json.load(open(path))
+except (json.JSONDecodeError, FileNotFoundError):
+    settings = {}
+hooks = settings.setdefault("hooks", {})
+
+def ensure(event, matcher, script, timeout):
+    """Add python3 <script> once; any existing registration of that script counts."""
+    groups = hooks.setdefault(event, [])
+    name = os.path.basename(script)
+    if any(name in h.get("command", "") for g in groups for h in g.get("hooks", [])):
+        return f"  {event}: {name} already registered"
+    entry = {"type": "command", "command": f"python3 {script}", "timeout": timeout}
+    for g in groups:
+        if g.get("matcher", "") == matcher:
+            g.setdefault("hooks", []).append(entry)
+            break
+    else:
+        groups.append({"matcher": matcher, "hooks": [entry]})
+    return f"  {event}: {name} registered"
+
+# SessionStart is the only event that sees /clear and /compact change the
+# conversation id; synchronous so the marker is right before the first prompt.
+print(ensure("SessionStart", "", f"{hook_dir}/session-marker.py", 5))
+# GNU-style pkill on macOS turned extra arguments into match patterns and
+# killed 186 processes on 2026-10-15.
+print(ensure("PreToolUse", "Bash", f"{hook_dir}/guard-pkill.py", 5))
+with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False, suffix=".tmp") as tf:
+    json.dump(settings, tf, indent=2, ensure_ascii=False)
+os.replace(tf.name, path)
+PYTHON
+ok "sessionctl linked into ~/.local/bin; session hooks wired"
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "====================================="
@@ -293,6 +316,6 @@ echo "New happy session:    happy-session 'My Task'"
 echo "New Codex session:   codex-session 'My Task'"
 echo "New claude session:   claude-session 'My Task'"
 echo "End a session:        end-session 'My Task'"
+echo "Session control:      sessionctl status | restart 'My Task' | idle"
 echo ""
-echo "Or in VS Code: click '+' dropdown → 'Happy Session'"
 echo ""

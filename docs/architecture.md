@@ -1,89 +1,111 @@
 # Architecture
 
-The project has one install entrypoint and three runtime command families.
+## Layers
 
-## Install Layer
+| Layer | Component | Owns |
+|---|---|---|
+| Display | Otty tab (or VS Code terminal) | nothing; one tab attaches to one tmux session |
+| Persistence | tmux session `<name>`, cwd `~/claude-sessions/<name>` | keeping the agent alive when the terminal quits |
+| Lifecycle | `bin/sessionctl` + `lib/sessionlib.py` | start / stop / restart / status, one lock per session |
+| Resume | `bin/smart-resume.sh` | which conversation to resume, bg-lock fork, bounded retries |
+| Sync | happy wrapper (`node .../happy/dist/index.mjs`) | phone sync, local ⇄ remote mode |
+| Work | `claude` (via `claude_local_launcher.cjs`) | the conversation; writes `~/.claude/projects/<key>/<uuid>.jsonl` |
 
-`setup-workspace.sh` installs the repo into:
+Process chain of a running session:
 
 ```text
-~/.claude/claude-workspace/
+tmux pane shell
+└─ sh -c "stty sane; env ... bash smart-resume.sh '<name>'; exec /bin/zsh -l"
+   └─ bash smart-resume.sh <name>
+      └─ node bin/happy --yolo --permission-mode bypassPermissions --resume <uuid>
+         └─ node happy/dist/index.mjs            ← "happy wrapper"
+            └─ node happy/scripts/claude_local_launcher.cjs
+               └─ claude --resume <uuid> ...     ← tool shells (zsh -c ...) run below it
 ```
 
-It then updates `~/.zshrc`, tmux settings, VS Code settings, and Claude Code
-hooks. User commands point directly at installed `bin/*` files; there is no
-extra wrapper layer.
+`exec /bin/zsh -l` keeps the pane (and the Otty tab) when the agent exits.
+One `happy daemon` per machine registers sessions with the server and lets the
+phone start or resume sessions.
 
-## Runtime Commands
+## sessionlib: one rule per decision
 
-`bin/claude-session`
+Before this module, five scripts each had their own copy: four "newest
+conversation" algorithms, three project-directory rules, three liveness checks.
 
-- creates `~/claude-sessions/<name>`
-- starts or attaches to `tmux` session `<name>`
-- launches either `claude` or `happy`, depending on `CLAUDE_LAUNCHER`
-- syncs Claude Code OAuth credentials only for the `Personal` session when it
-  runs with `CLAUDE_CONFIG_DIR=~/.claude-private`
-- removes any default `~/.claude/projects/...Personal` startup shadow if it is
-  only a symlink or permission-mode stub
-- registers the terminal with VS Code Restore Terminals
+- **Paths.** `session_dir(name) = ~/claude-sessions/<name>`; config root is
+  `~/.claude-private` for `Personal`, else `~/.claude`; project dir is the
+  session path with every character outside `[A-Za-z0-9-]` turned into `-`
+  (Claude Code's and happy's rule).
+- **Processes.** Everything is found from the pane's process tree, so
+  sessions started by older code are recognised too.
+- **State.** `busy` (tool shell under claude, transcript written < 180 s,
+  working indicator on screen), `background` (bg-agent job working < 600 s),
+  `waiting` (last hook status), `idle`, `stopped`, `missing`. Same thresholds
+  as the tab-status poller.
+- **Live conversation.** happy's log (`[SESSION_SCANNER] New session: <uuid>`,
+  which follows `/clear`, `/compact` and forks) → claude's `--resume` argument
+  → the marker if its transcript exists → newest transcript with a real turn
+  that is not a bg-agent job.
+- **Auth error.** The live conversation's last user/assistant entry is an
+  `isApiErrorMessage` with `error: "authentication_failed"`.
 
-`bin/claude-auth-sync`
+## The conversation marker
 
-- compares the default and private macOS Keychain Claude Code credential slots
-- copies the newest OAuth credential to the older slot without printing the token
-- syncs non-secret auth metadata in `.claude.json`
-- is invoked by `claude-session` only for `Personal`
+`~/claude-sessions/<name>/.current-session` tells `smart-resume.sh` what to
+resume. Writers:
 
-`bin/smart-resume.sh`
+1. `hooks/session-marker.py` on `SessionStart` (payload: `session_id`,
+   `transcript_path`, `cwd`, `source`; the hook's parent is the claude that
+   fired it). It writes only when that claude descends from the happy wrapper
+   in the session's pane (remote mode included), the transcript is in the
+   session's project dir, and the id is not a bg-agent job's. Forks run with
+   `SESSION_MARKER_SKIP=1`.
+2. `sessionctl stop` aligns it with happy's log before stopping (same source
+   of truth, a safety net).
+3. `claude-session NAME <uuid>`, an explicit choice, via `sessionlib write-marker`.
 
-- wraps the `happy --yolo --resume` launch for happy-session tabs
-- detects a live bg-agent lock and forks to a clean UUID before resuming
-- retries bounded times on quick exits (auth failures, broken UUIDs)
-- reads `~/claude-sessions/<name>/.backend` each iteration and, when it says
-  `claudex`, injects the CLIProxyAPI env so the same conversation resumes on
-  GPT-5.6 Sol; relaunches immediately when the marker changes mid-session
+Readers (`smart-resume.sh`, `lib/session.sh`) never write it.
 
-`bin/session-model`
+## sessionctl
 
-- shows or sets a session's Claude backend (`claude` = Anthropic default,
-  `claudex` = GPT-5.6 Sol via a local CLIProxyAPI on 127.0.0.1:8317)
-- writes the `~/claude-sessions/<name>/.backend` marker consumed by
-  `smart-resume.sh`; exiting Claude inside the session applies the switch
-- reads the proxy API key from `/opt/homebrew/etc/cliproxyapi.conf` — the key
-  is never copied anywhere else
+| Command | Behaviour |
+|---|---|
+| `start` | new tmux session, or `respawn-pane -k` over an idle shell; no-op if running; refuses a pane running something else |
+| `stop` | refuse if busy (unless `--force`); align marker; drop `<name>.stopping` flag; SIGTERM happy → wait 15 s (→ SIGKILL); stop orphaned launcher, then claude; wait for the pane shell; `stty -f <tty> sane` |
+| `restart` | stop + start under one lock |
+| `status`, `idle` | from sessionlib |
 
-`bin/end-session`
+Exit codes: 0 ok, 1 error, 2 no such session, 3 busy, 4 pid identity changed,
+5 a process would not stop, 75 locked. Every signal is sent only if the pid's
+start time and command still match what was recorded.
 
-- kills the tmux session
-- removes the VS Code Restore Terminals entry
+## Failure modes this design answers
 
-`bin/codex-session`
+| Symptom | Cause | Answer |
+|---|---|---|
+| New Claude prints "Resume this session with" and exits; Enter does nothing in the pane | a killed Claude left the pty in raw mode (`-icrnl -isig`) | launch command runs `stty sane`; `stop` repairs the tty; no typing into panes |
+| Two claudes on one conversation; daemon refuses phone resume | happy's SIGTERM handler exits without killing claude | `stop` kills the orphaned launcher, then claude |
+| Killed claude comes straight back | the launcher respawns it | stop the launcher first |
+| Session relaunched right after a stop | smart-resume retries exits < 10 s | `<name>.stopping` flag ends its loop |
+| `happy --yolo --resume` typed into a live conversation | watchdog liveness check returned from a pipeline subshell | state from `sessionctl status` |
+| "Product" acted on "Product priorities" | tmux prefix matching | exact targets `=name:` everywhere |
+| Resumed the wrong conversation after `/clear` | nothing updated the marker mid-session | SessionStart hook |
+| Idle sessions burn CPU and memory | happy re-read the whole transcript every 3 s | incremental scanner (ops patch, upstream PR #1915) |
 
-- creates `~/codex-sessions/<name>`
-- starts or attaches to tmux session `codex-<name>`
-- launches `happy codex` with cwd pointed at that fixed folder
-- registers the terminal with VS Code Restore Terminals as `Codex: <name>`
+## ops (launchd)
 
-## Shared Helpers
+- `claude-auth-watchdog.sh`, every 10 min: restarts stopped sessions with
+  `sessionctl start`; runs the in-session `/login` flow only for a real,
+  unanswered `authentication_failed` in an idle session.
+- `claude-nightly-upgrade.sh`, 04:00: upgrades Claude Code, `sessionctl restart`s
+  idle sessions still on the old version.
+- `log-janitor.sh`, hourly: log/disk housekeeping; daily Otty `state.db`
+  backup, idle-session report (no auto-stop), happy patch check.
+- Shared private settings: `~/.config/claude-workspace/local.env`.
 
-`lib/session.sh` owns shell-level session mechanics:
+## Personal
 
-- session directory paths
-- Claude JSONL session-id lookup
-- tmux attach/switch behavior
-- VS Code CWD escape sequence
-
-`lib/vscode_restore.py` owns JSON mutation for VS Code settings:
-
-- register restore command
-- remove restore command
-- atomic writes
-
-## Hooks
-
-`hooks/loop.sh` is the installed Claude Stop hook. If the current directory has
-a `tasks.md` with unchecked items, it blocks completion and asks Claude to work
-the next task.
-
-`hooks/sync-session-id.sh` is kept as an available hook helper, but it is not
-enabled by default.
+`Personal` uses `CLAUDE_CONFIG_DIR=~/.claude-private`. `claude-session`
+refuses to start it otherwise and syncs its Keychain credential slot;
+`personal_history.py` chooses its conversation by latest real message and
+refuses while a private bg job is working.
