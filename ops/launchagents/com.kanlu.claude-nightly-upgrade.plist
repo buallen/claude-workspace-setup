@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kanlu.claude-nightly-upgrade</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/kan.lu/bin/claude-nightly-upgrade.sh</string>
+    </array>
+
+    <!-- 04:00。00:25 distiller / 02:30 mall-effect-loop / 02:55 mall-heartbeat
+         都会拉起 claude 进程，撞上会互相干扰；03:30-08:00 是唯一干净的空档。
+         机器夜间由 caffeinate 保持唤醒，不存在错过触发的问题。 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- 必须 false。这个任务会 kill 并重启 session，RunAtLoad=true 等于
+         在 launchctl load 的那一刻把正在用的会话全掀掉。 -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-nightly-upgrade-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-nightly-upgrade-launchd.log</string>
+
+    <!-- 脚本自己会把 nvm 的 bin 插到 PATH 最前（否则 npm 会把包装进
+         homebrew node 的 Cellar 目录），这里给的是基础 PATH。 -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/kan.lu</string>
+        <key>TZ</key>
+        <string>Asia/Singapore</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

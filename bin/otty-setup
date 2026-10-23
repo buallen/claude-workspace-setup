@@ -329,6 +329,25 @@ if [[ -z "$OTTY_NO_AUTO_ATTACH" && "$PWD" == "$HOME/claude-sessions/"* ]]; then
       print "$(date +%T) pid=$$ ATTACH(zprofile) → $_oaa" >> /tmp/oaa-debug.log
       # 不用 exec：tmux 退出/detach 后回到本 shell 的提示符，otty tab 不关闭
       /opt/homebrew/bin/tmux attach -t "$_oaa"
+    elif [[ -x "$HOME/.claude/claude-workspace/bin/claude-session" ]]; then
+      # 重启后 tmux 已消失；非 login 子 shell 加载 .zshrc/NVM，避免递归执行本块。
+      /bin/zsh -ic '
+        export CLAUDE_LAUNCHER=happy
+        export CLAUDE_CONFIG_DIR="$HOME/.claude"
+        if [[ "$1" == "Personal" ]]; then
+          export CLAUDE_CONFIG_DIR="$HOME/.claude-private"
+        fi
+        "$HOME/.claude/claude-workspace/bin/claude-session" "$1"
+      ' otty-auto-restore "$_oaa" || {
+        # 同名标签并发恢复时，另一个标签可能已创建好会话；只连接，不重启。
+        if /opt/homebrew/bin/tmux has-session -t "=$_oaa" 2>/dev/null; then
+          /opt/homebrew/bin/tmux attach -t "=$_oaa"
+        else
+          print -u2 -- "[Otty] 自动恢复失败：$_oaa；已保留命令行。"
+        fi
+      }
+    else
+      print -u2 -- "[Otty] 启动器不存在或不可执行：$HOME/.claude/claude-workspace/bin/claude-session"
     fi
     unset _oaa
   fi

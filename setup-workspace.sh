@@ -45,7 +45,8 @@ cp -R "$REPO_DIR/bin" "$REPO_DIR/lib" "$REPO_DIR/hooks" "$REPO_DIR/config" "$INS
 chmod +x "$INSTALL_DIR/bin/"* "$INSTALL_DIR/hooks/"* "$INSTALL_DIR/lib/vscode_restore.py"
 rm -f "$INSTALL_DIR/bin/happy-vibe-session"
 rm -f ~/.claude/claude-session.sh ~/.claude/happy-vibe-session.sh ~/.local/bin/happy-vibe-session ~/.local/bin/session-restore-mode ~/.claude/end-session.sh ~/.claude/hooks/loop.sh ~/.claude/hooks/sync-session-id.sh
-ln -sf "$INSTALL_DIR/bin/session-model" ~/.local/bin/session-model
+# session-model 已于 2026-09-14 随本机代理一起退役，清掉旧安装留下的链接
+rm -f ~/.local/bin/session-model "$INSTALL_DIR/bin/session-model"
 ln -sf "$INSTALL_DIR/bin/codex-session" ~/.local/bin/codex-session
 ok "Workspace scripts installed"
 
@@ -85,7 +86,6 @@ alias claude-session="~/.claude/claude-workspace/bin/claude-session"
 alias happy-session="CLAUDE_LAUNCHER=happy ~/.claude/claude-workspace/bin/claude-session"
 alias happy-session-private='CLAUDE_LAUNCHER=happy CLAUDE_CONFIG_DIR=~/.claude-private ~/.claude/claude-workspace/bin/claude-session'
 alias codex-session="~/.claude/claude-workspace/bin/codex-session"
-alias session-model="~/.claude/claude-workspace/bin/session-model"
 alias end-session="~/.claude/claude-workspace/bin/end-session"
 """
 

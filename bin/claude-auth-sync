@@ -151,6 +151,31 @@ finally:
 PY
 }
 
+# 凭据能不能续期，比它新不新重要得多。没有 refreshToken 的凭据一过期就是死的，
+# 拿它覆盖另一侧等于把好槽位一起弄坏。2026-09-17 就发生过：Personal 槽位退化成
+# expiresAt=0 且无 refreshToken，但 mtime 更新，下一次同步就会反向污染主槽位。
+credential_is_healthy() {
+  local service="$1"
+  python3 - "$USER" "$service" <<'PY'
+import json
+import subprocess
+import sys
+
+user, service = sys.argv[1], sys.argv[2]
+try:
+    raw = subprocess.check_output(
+        ["security", "find-generic-password", "-a", user, "-s", service, "-w"],
+        stderr=subprocess.DEVNULL,
+    ).decode().strip()
+    data = json.loads(raw)
+except Exception:
+    raise SystemExit(1)
+
+oauth = data.get("claudeAiOauth") or data
+raise SystemExit(0 if oauth.get("refreshToken") else 1)
+PY
+}
+
 DEFAULT_CONFIG_DIR="${HOME}/.claude"
 DEFAULT_SERVICE="$(service_for_config_dir "")"
 PRIVATE_SERVICE="$(service_for_config_dir "$PRIVATE_CONFIG_DIR")"
@@ -185,6 +210,32 @@ if [ -n "$default_hex" ] && [ "$default_hex" = "$private_hex" ]; then
   exit 0
 fi
 
+default_healthy=false
+private_healthy=false
+credential_is_healthy "$DEFAULT_SERVICE" && default_healthy=true
+credential_is_healthy "$PRIVATE_SERVICE" && private_healthy=true
+
+# 健康度优先于 mtime：只有一侧能续期时，无条件由它覆盖另一侧。
+if [ "$default_healthy" = true ] && [ "$private_healthy" = false ]; then
+  copy_keychain_secret "$DEFAULT_SERVICE" "$PRIVATE_SERVICE"
+  sync_auth_metadata "$DEFAULT_CONFIG_DIR" "$PRIVATE_CONFIG_DIR"
+  log "Claude auth synced: default -> private (private lacked a refresh token)"
+  exit 0
+fi
+
+if [ "$private_healthy" = true ] && [ "$default_healthy" = false ]; then
+  copy_keychain_secret "$PRIVATE_SERVICE" "$DEFAULT_SERVICE"
+  sync_auth_metadata "$PRIVATE_CONFIG_DIR" "$DEFAULT_CONFIG_DIR"
+  log "Claude auth synced: private -> default (default lacked a refresh token)"
+  exit 0
+fi
+
+if [ "$default_healthy" = false ] && [ "$private_healthy" = false ]; then
+  log "Claude auth sync skipped: neither credential has a refresh token; run /login once"
+  exit 1
+fi
+
+# 两侧都能续期，才回到「谁新用谁」。
 if [[ "$private_mtime" > "$default_mtime" ]]; then
   copy_keychain_secret "$PRIVATE_SERVICE" "$DEFAULT_SERVICE"
   sync_auth_metadata "$PRIVATE_CONFIG_DIR" "$DEFAULT_CONFIG_DIR"

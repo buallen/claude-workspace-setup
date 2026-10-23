@@ -2,7 +2,13 @@
 # Stop hook: if a report was just generated (flagged by detect-report.sh),
 # auto-trigger /discuss. Yields to loop.sh if there are pending tasks.
 
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 FLAG_FILE="/tmp/claude-discuss-pending"
+if [ "$CONFIG_DIR" = "$HOME/.claude-private" ]; then
+  FLAG_FILE=$(python3 "$(dirname "${BASH_SOURCE[0]}")/../lib/personal_history.py" --context-file discuss-pending) || exit 1
+elif [ "$CONFIG_DIR" != "$HOME/.claude" ]; then
+  FLAG_FILE="$CONFIG_DIR/discuss-pending"
+fi
 
 [ -f "$FLAG_FILE" ] || exit 0
 
@@ -15,8 +21,8 @@ if [ -f "$TASKS_FILE" ]; then
   fi
 fi
 
-REPORT_PATH=$(cat "$FLAG_FILE")
-rm -f "$FLAG_FILE"
+REPORT_PATH=$(python3 "$(dirname "${BASH_SOURCE[0]}")/../lib/report_state.py" take "$FLAG_FILE") || exit 1
+[ -n "$REPORT_PATH" ] || exit 0
 
 MSG="一份报告刚刚生成：${REPORT_PATH}\n\n现在请执行 /discuss skill，参数为 auto-triggered:${REPORT_PATH}，对这份报告开启启发式讨论。"
 MSG_JSON=$(printf '%s' "$MSG" | python3 -c 'import sys, json; print(json.dumps(sys.stdin.read()))')

@@ -39,6 +39,19 @@ enforce_personal_private_config() {
     echo "       Use: happy-session-private \"Personal\"" >&2
     exit 1
   fi
+  if [ "$SESSION_NAME" = "Personal" ]; then
+    CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" SESSION_ROOT="$SESSION_ROOT" \
+      python3 "$REPO_DIR/lib/personal_history.py" --check
+  fi
+}
+
+personal_launch_command() {
+  local parts=(python3 "$REPO_DIR/lib/personal_history.py" --launch "$LAUNCHER")
+  if [ -n "$SESSION_ID" ]; then
+    parts+=("$SESSION_ID")
+  fi
+  printf '%s' "$(session_env_prefix)"
+  printf '%q ' "SESSION_ROOT=$SESSION_ROOT" "${parts[@]}"
 }
 
 sync_personal_private_auth() {
@@ -83,24 +96,54 @@ session_env_prefix() {
   printf '%s' "$prefix"
 }
 
+is_current_invocation_process() {
+  local candidate="$1"
+  local pid="$$"
+  local parent
+
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    [ "$pid" = "$candidate" ] && return 0
+    parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    if [ -z "$parent" ] || [ "$parent" = "$pid" ]; then
+      break
+    fi
+    pid="$parent"
+  done
+
+  return 1
+}
+
+pane_has_other_child() {
+  local pane_pid="$1"
+  local pid ppid
+
+  while read -r pid ppid; do
+    [ "$ppid" = "$pane_pid" ] || continue
+    if ! is_current_invocation_process "$pid"; then
+      return 0
+    fi
+  done < <(ps -eo pid=,ppid=)
+
+  return 1
+}
+
 enforce_personal_private_config
 sync_personal_private_auth
 
 if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
   SESSION_DIR="$(session_dir "$SESSION_NAME")"
   ensure_session_dir "$SESSION_NAME"
-  cleanup_personal_default_shadow "$SESSION_NAME" || true
   RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
   ENV_PREFIX="$(session_env_prefix)"
 
-  if [ "$LAUNCHER" = "happy" ] && [ "$SESSION_NAME" != "Personal" ]; then
+  if [ "$SESSION_NAME" = "Personal" ]; then
+    SESSION_CMD="$(personal_launch_command)"
+    RESTORE_CMD="$(restore_launcher)"
+  elif [ "$LAUNCHER" = "happy" ]; then
     # smart-resume: auto-detects bg-agent lock, forks if needed, retries on quick exit
     # Quote $SESSION_NAME so names with spaces (e.g. "Beep delivery") reach
     # smart-resume.sh as a single $1 arg, not word-split into $1/$2.
     SESSION_CMD="${ENV_PREFIX}bash -c $(printf '%q ' "$SCRIPT_DIR/smart-resume.sh \"$SESSION_NAME\"")"
-    RESTORE_CMD="$(restore_launcher)"
-  elif [ "$LAUNCHER" = "happy" ]; then
-    SESSION_CMD="${ENV_PREFIX}$(printf '%q ' happy --yolo)"
     RESTORE_CMD="$(restore_launcher)"
   elif [ -n "$RESOLVED_SESSION_ID" ]; then
     SESSION_CMD="${ENV_PREFIX}$(printf '%q ' claude --dangerously-skip-permissions --resume "$RESOLVED_SESSION_ID")"
@@ -119,29 +162,30 @@ if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     exit 1
   fi
 
-  python3 "$REPO_DIR/lib/vscode_restore.py" register "$VSCODE_SETTINGS" "$SESSION_NAME" "$RESTORE_CMD" "$RESOLVED_SESSION_ID"
-  if [ "$SESSION_NAME" = "Personal" ] && [ "$CLAUDE_CONFIG_DIR" = "$HOME/.claude-private" ]; then
-    sleep 1
-    cleanup_personal_default_shadow "$SESSION_NAME" || true
+  RESTORE_SESSION_ID="$RESOLVED_SESSION_ID"
+  if [ "$SESSION_NAME" = "Personal" ]; then
+    # Default restores reselect the latest conversation, not today's snapshot.
+    RESTORE_SESSION_ID="$SESSION_ID"
   fi
+  python3 "$REPO_DIR/lib/vscode_restore.py" register "$VSCODE_SETTINGS" "$SESSION_NAME" "$RESTORE_CMD" "$RESTORE_SESSION_ID"
   echo "New session: $SESSION_NAME"
 else
   echo "Restored session: $SESSION_NAME"
   # 窗口可能已回落到 fallback shell（happy/claude 退出后 exec zsh 保住了 tab）。
   # 此时只 attach 会进到一个空壳 shell——若 pane 无子进程，先自动重新拉起。
-  # 注意：`pgrep -P` 对不在调用者自身进程树下的 PID 会静默漏判（2026-07-20 实测：
-  # 对本 session 自己 fork 出的临时进程能查到，但对其他 tmux pane 的真实活子进程
-  # 查不到，`ps -eo ppid=` 却能看到同一个 PID）——用 ps 查 ppid 列表代替 pgrep -P。
+  # 用 ps 查真实 ppid 列表（pgrep -P 在沙箱中会漏掉其他 pane 的子进程）。
+  # 若命令正从目标 pane 的 fallback shell 执行，忽略本次 happy-session 调用自身
+  # 的进程链；否则它会被误当成仍在运行的 agent，导致只打印 Restored 而不重拉。
   PANE_PID="$(tmux list-panes -t "$SESSION_NAME" -F '#{pane_pid}' 2>/dev/null | head -1)"
-  if [ -n "$PANE_PID" ] && ! ps -eo ppid= | tr -d ' ' | grep -qx "$PANE_PID"; then
-    if [ "$LAUNCHER" = "happy" ] && [ "$SESSION_NAME" != "Personal" ]; then
+  if [ -n "$PANE_PID" ] && ! pane_has_other_child "$PANE_PID"; then
+    if [ "$SESSION_NAME" = "Personal" ]; then
+      RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
+      tmux send-keys -t "$SESSION_NAME" "$(personal_launch_command)" Enter
+    elif [ "$LAUNCHER" = "happy" ]; then
       tmux send-keys -t "$SESSION_NAME" "$SCRIPT_DIR/smart-resume.sh $(printf '%q' "$SESSION_NAME")" Enter
     else
       RESOLVED_SESSION_ID="$(resolve_session_id "$SESSION_NAME" "$SESSION_ID")"
-      if [ "$LAUNCHER" = "happy" ]; then
-        # Personal：与创建分支一致，不带 --resume（UUID 属 private config，语义不同）
-        tmux send-keys -t "$SESSION_NAME" "happy --yolo" Enter
-      elif [ -n "$RESOLVED_SESSION_ID" ]; then
+      if [ -n "$RESOLVED_SESSION_ID" ]; then
         tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --resume $RESOLVED_SESSION_ID" Enter
       else
         tmux send-keys -t "$SESSION_NAME" "claude --dangerously-skip-permissions --continue" Enter

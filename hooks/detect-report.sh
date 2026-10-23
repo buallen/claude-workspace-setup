@@ -33,7 +33,14 @@ if echo "$FILE_PATH" | grep -qE \
   fi
 
   if [ "$SIZE" -gt 2000 ]; then
-    echo "$FILE_PATH" > /tmp/claude-discuss-pending
+    CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    FLAG_FILE="/tmp/claude-discuss-pending"
+    if [ "$CONFIG_DIR" = "$HOME/.claude-private" ]; then
+      FLAG_FILE=$(python3 "$(dirname "${BASH_SOURCE[0]}")/../lib/personal_history.py" --context-file discuss-pending)
+    elif [ "$CONFIG_DIR" != "$HOME/.claude" ]; then
+      FLAG_FILE="$CONFIG_DIR/discuss-pending"
+    fi
+    python3 "$(dirname "${BASH_SOURCE[0]}")/../lib/report_state.py" put "$FLAG_FILE" "$FILE_PATH"
   fi
 fi
 

@@ -70,6 +70,12 @@ resolve_session_id() {
   local session_project_dir session_project_key found_id candidate f
   local current_session_file
 
+  if [ "$session_name" = "Personal" ]; then
+    CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" SESSION_ROOT="$SESSION_ROOT" \
+      python3 "$(dirname "${BASH_SOURCE[0]}")/personal_history.py" "$session_id"
+    return $?
+  fi
+
   session_project_key="$(session_project_key "$session_name")"
   session_project_dir="$CLAUDE_CONFIG_DIR/projects/${session_project_key}"
   mkdir -p "$session_project_dir"

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.kanlu.claude-auth-watchdog</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-l</string>
+		<string>/Users/kan.lu/bin/claude-auth-watchdog.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/tmp/claude-auth-watchdog-stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/claude-auth-watchdog-stdout.log</string>
+	<key>StartInterval</key>
+	<integer>600</integer>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+</dict>
+</plist>

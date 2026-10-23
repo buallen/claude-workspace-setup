@@ -5,40 +5,60 @@
 #   - Scenario A: bg-agent killed mid-task → lock residue → fork to clean UUID
 #   - Scenario B: happy exits to session picker → same lock → fork + resume
 #
-# Backend switching (session-model):
-#   Every session ALWAYS routes through CLIProxyAPI (127.0.0.1:8317) when it's
-#   reachable — real Claude models forward straight through to Anthropic using
-#   a real Anthropic OAuth credential (~/.cli-proxy-api/claude-*.json), GPT
-#   models forward to the codex provider. This is what makes gpt-5.6-sol show
-#   up directly in the in-app /model picker (as a "Custom Haiku model") on
-#   EVERY session, selectable without needing to switch backend first
-#   (2026-07-20; previously the proxy was opt-in per session via .backend).
-#   If the proxy is down, LAUNCH_ENV is left empty and happy falls straight
-#   through to Anthropic directly — a dead local proxy degrades gracefully,
-#   it doesn't take every session down with it.
+# Backend: direct to Anthropic, no local proxy. (simplified 2026-09-14)
+#   Every session uses the Keychain OAuth credential straight against Anthropic,
+#   with no --model pin — /model inside the session is the only thing that
+#   decides which model runs.
 #
-#   ~/claude-sessions/<name>/.backend == "claudex" additionally makes
-#   gpt-5.6-sol the PREFERRED default (launch --model + subagent model) for
-#   this session, on top of the always-on proxy routing above. Absent file =
-#   Anthropic's own default model set (Fable/Opus/Sonnet) is preferred, but
-#   gpt-5.6-sol is still there in /model if you want to pick it manually. The
-#   file is re-read every loop iteration, so exiting Claude once inside the
-#   session is enough to relaunch the SAME conversation with the new default.
+#   History, so nobody re-adds any of this:
+#     2026-08-05  the GPT path was removed. gpt-5.6-sol was dropped from the
+#                 gateway, so every pin to it resolved to a dead model ("It may
+#                 not exist or you may not have access to it"), and sessions that
+#                 round-tripped between Anthropic and codex died on
+#                 `400 Invalid signature in thinking block`.
+#     2026-08-17  CLIProxyAPI (127.0.0.1:8317) was retired and uninstalled.
+#     2026-09-14  claude-code-router (127.0.0.1:3456) was removed; it had also
+#                 written a broken // comment into ~/.claude/settings.json, which
+#                 silently disabled every global hook/env until it was fixed.
+#   The proxy-selection branches and the ~/claude-sessions/<name>/.backend marker
+#   were dead code after that (cliproxyapi.conf no longer exists, so the proxy
+#   branch could never be entered) and have been deleted.
 
 SESSION_NAME="$1"
+if [ "$SESSION_NAME" = "Personal" ]; then
+  # 先解析软链：经 ~/.happy/smart-resume.sh 调用时，dirname 会落在 ~/.happy，
+  # cd -P 只解析目录不解析文件本身，../lib 就找不到了（2026-10-23 重启 Personal 时踩到）。
+  SCRIPT_DIR="$(cd -P "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+  export CLAUDE_CONFIG_DIR="$HOME/.claude-private"
+  # Personal 没有活跃会话，token 只能靠外部镜像；6h 定时器最坏会留下一个
+  # 比 token 寿命还长的过期窗口，所以启动这一刻再同步一次才能封住。
+  python3 "$HOME/bin/claude-token-refresh.py" --sync-only >/dev/null 2>&1 || true
+  exec python3 "$SCRIPT_DIR/../lib/personal_history.py" --launch happy
+fi
 SESSION_DIR="$HOME/claude-sessions/$SESSION_NAME"
-CLAUDEX_CONF="/opt/homebrew/etc/cliproxyapi.conf"
-CLAUDEX_URL="http://127.0.0.1:8317"
-CLAUDEX_MODEL="gpt-5.6-sol"
+PROJ_DIR="$HOME/.claude/projects/-Users-kan-lu-claude-sessions-${SESSION_NAME// /-}"
 
+# .current-session can outlive its transcript: cleanupPeriodDays (14) purges old
+# JSONLs, and `--resume <purged uuid>` fails with "No conversation found" on
+# every retry. Only return a uuid whose JSONL still exists; otherwise fall back
+# to the newest surviving JSONL (and record it), or nothing → fresh session.
 get_uuid() {
-  cat "$SESSION_DIR/.current-session" 2>/dev/null
-}
-
-# The proxy key lives only in cliproxyapi.conf (single source of truth).
-claudex_key() {
-  sed -n '/^api-keys:/,/^[a-z]/p' "$CLAUDEX_CONF" 2>/dev/null \
-    | grep -m1 '^[[:space:]]*-' | sed -E 's/.*"([^"]+)".*/\1/'
+  local uuid newest
+  uuid=$(cat "$SESSION_DIR/.current-session" 2>/dev/null)
+  if [ -n "$uuid" ] && [ -f "$PROJ_DIR/$uuid.jsonl" ]; then
+    echo "$uuid"
+    return
+  fi
+  newest=$(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null | head -1)
+  if [ -n "$newest" ]; then
+    newest=$(basename "$newest" .jsonl)
+    echo "[smart-resume] stale uuid ${uuid:-<none>}, using newest transcript $newest" >&2
+    echo "$newest" > "$SESSION_DIR/.current-session"
+    echo "$newest"
+  elif [ -n "$uuid" ]; then
+    echo "[smart-resume] transcript for $uuid was purged, starting a fresh session" >&2
+    rm -f "$SESSION_DIR/.current-session"
+  fi
 }
 
 # A real bg-agent lock = THIS session has a background job that is ACTIVELY
@@ -115,57 +135,28 @@ while true; do
     UUID=$(get_uuid)  # re-read after potential update
   fi
 
-  # Backend selection — re-read every iteration so `session-model <name> claudex`
-  # + one exit inside the session hot-swaps the default for the same conversation.
-  BACKEND=$(cat "$SESSION_DIR/.backend" 2>/dev/null | tr -d '[:space:]')
-  LAUNCH_ENV=()
-  MODEL_ARGS=()
-  CKEY=$(claudex_key)
-  if [ -n "$CKEY" ] && curl -s -m 2 -o /dev/null "$CLAUDEX_URL/v1/models" 2>/dev/null; then
-    # Proxy reachable → always route through it (Claude models forward to real
-    # Anthropic, gpt-5.6-sol forwards to codex) so both are always in /model.
-    LAUNCH_ENV=(
-      "ANTHROPIC_BASE_URL=$CLAUDEX_URL"
-      "ANTHROPIC_AUTH_TOKEN=$CKEY"
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL=$CLAUDEX_MODEL"
-    )
-    if [ "$BACKEND" = "claudex" ]; then
-      LAUNCH_ENV+=(
-        "CLAUDE_CODE_SUBAGENT_MODEL=$CLAUDEX_MODEL"
-        "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=1"
-        "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY=3"
-        "ENABLE_TOOL_SEARCH=false"
-      )
-      MODEL_ARGS=(--model "$CLAUDEX_MODEL")
-      echo "[smart-resume] proxy routed, default: $CLAUDEX_MODEL (claudex preferred)"
-    else
-      echo "[smart-resume] proxy routed, default: Anthropic (gpt-5.6-sol also selectable via /model)"
-    fi
-  else
-    echo "[smart-resume] ⚠ CLIProxyAPI unreachable on $CLAUDEX_URL — falling back to direct Anthropic, gpt-5.6-sol won't be in /model this launch (brew services start cliproxyapi)"
-  fi
+  # The pane's fallback shell may have INHERITED ANTHROPIC_* from an older
+  # proxied launch, so actively unset them (env -u) rather than merely not
+  # setting them. No --model pin: /model inside the session decides.
+  LAUNCH_ENV=(-u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_DEFAULT_HAIKU_MODEL -u CLAUDE_CODE_SUBAGENT_MODEL)
+  echo "[smart-resume] direct Anthropic, no model pin"
 
   START=$(date +%s)
 
   if [ -n "$UUID" ]; then
-    env "${LAUNCH_ENV[@]}" happy --yolo "${MODEL_ARGS[@]}" --resume "$UUID"
+    env "${LAUNCH_ENV[@]}" happy --yolo --permission-mode bypassPermissions \
+      --resume "$UUID"
   else
-    env "${LAUNCH_ENV[@]}" happy --yolo "${MODEL_ARGS[@]}"
+    env "${LAUNCH_ENV[@]}" happy --yolo --permission-mode bypassPermissions
   fi
 
   EXIT_CODE=$?
   ELAPSED=$(( $(date +%s) - START ))
 
-  # If happy ran for more than 10s, assume user exited deliberately → stop…
-  # …unless the backend marker changed vs what we just ran with: that exit was
-  # a backend hot-swap, so relaunch immediately on the new backend.
-  NEW_BACKEND=$(cat "$SESSION_DIR/.backend" 2>/dev/null | tr -d '[:space:]')
+  # If happy ran for more than 10s, assume the user exited deliberately → stop.
+  # NOTE: an external `kill` of a long-lived session also lands here and ends the
+  # loop; relaunch that pane with `happy-session '<name>'`.
   if [ "$ELAPSED" -ge 10 ]; then
-    if [ "$NEW_BACKEND" != "$BACKEND" ]; then
-      echo "[smart-resume] backend changed: '${BACKEND:-claude}' → '${NEW_BACKEND:-claude}', relaunching..."
-      RETRIES=0
-      continue
-    fi
     break
   fi
 
