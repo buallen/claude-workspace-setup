@@ -34,7 +34,8 @@ LAUNCHER_RE = re.compile(r"node_modules/happy(?:-coder)?/scripts/claude_local_la
 # native binary that happy uses in remote mode (.../claude-agent-sdk-darwin-arm64/claude),
 # or the older cli.js.
 CLAUDE_RE = re.compile(r"(?:^|/)claude(?:\.exe)?$|@anthropic-ai/claude-code/cli\.js$")
-TOOL_SHELL_RE = re.compile(r"^(?:/bin/)?(?:zsh|bash|sh) -c ")
+# `zsh -c`, also `bash -lc` / `zsh -ic`: a shell running a command string.
+TOOL_SHELL_RE = re.compile(r"^(?:/bin/)?(?:zsh|bash|sh) -[a-zA-Z]*c ")
 RESUME_ARG_RE = re.compile(r"--(?:resume|session-id)[ =]([0-9a-f-]{36})")
 
 # Same thresholds and pattern as tab-status-poller.py, so `sessionctl status`

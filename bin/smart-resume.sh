@@ -148,7 +148,9 @@ while true; do
   # The flag holds the stopping sessionctl's pid; honour it only while that
   # process lives, so a flag left by a killed sessionctl cannot disable retries.
   stop_flag="$HOME/.claude/session-locks/${SESSION_NAME}.stopping"
-  if [ -e "$stop_flag" ] && kill -0 "$(cut -d' ' -f1 "$stop_flag" 2>/dev/null)" 2>/dev/null; then
+  stop_pid="$(cut -d' ' -f1 "$stop_flag" 2>/dev/null)"
+  # Only a positive pid: `kill -0 0` / `-1` succeed (process group / everything).
+  if [ -e "$stop_flag" ] && [[ "$stop_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$stop_pid" 2>/dev/null; then
     break
   fi
 

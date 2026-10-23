@@ -195,7 +195,10 @@ def stop(name, force=False):
         "happy": [i for i in map(sl.identity, procs.happy) if i],
         "launcher": [i for i in map(sl.identity, procs.launcher) if i],
         "claude": [i for i in map(sl.identity, procs.claude) if i],
-        "conversations": [uuid] if uuid else [],
+        # The live id (from happy) and each claude's own --resume id, which
+        # differs after /clear; used to find an orphan adopted by launchd.
+        "conversations": sorted({uuid} - {None} | {m.group(1) for i in procs.claude
+                                                     if (m := sl.RESUME_ARG_RE.search(sl.identity(i)[2] if sl.identity(i) else ""))}),
     }
     log(f"→ {name}: stopping happy {procs.happy}, launcher {procs.launcher}, claude {procs.claude} (conversation {uuid or '?'})")
     with stopping_flag(name):
@@ -249,7 +252,8 @@ def _stop_processes(name, recorded):
     for uuid in recorded.get("conversations", []):
         table = sl.process_table()
         for pid, (ppid, command) in table.items():
-            if ppid == 1 and uuid in command and sl.CLAUDE_RE.search(sl.program(command)):
+            match = sl.RESUME_ARG_RE.search(command)
+            if ppid == 1 and match and match.group(1) == uuid and sl.CLAUDE_RE.search(sl.program(command)):
                 ident = sl.identity(pid)
                 if ident:
                     recorded["claude"].append(ident)
@@ -292,18 +296,26 @@ def start(name, wait=True):
         if procs and (procs.happy or procs.claude):
             log(f"· {name}: already running")
             return OK
-        if procs and (procs.smart_resume or procs.launcher):
+        if procs and procs.smart_resume:
+            # smart-resume is (re)launching: don't respawn over it; wait below if asked.
             log(f"· {name}: already launching")
-            return OK
+            if not wait:
+                return OK
+        elif procs and procs.launcher:
+            log(f"✗ {name}: a launcher without happy is left in the pane; run `sessionctl stop {name}` first")
+            return BUSY
         info = sl.pane(name)
-        if info and info["command"] not in sl.SHELL_COMMANDS:
+        if procs and procs.smart_resume:
+            pass  # launching already: nothing to respawn, just wait for it
+        elif info and info["command"] not in sl.SHELL_COMMANDS:
             log(f"✗ {name}: pane is running '{info['command']}', not replacing it")
             return BUSY
-        # respawn-pane replaces the idle shell; nothing is typed into the pane.
-        code, _ = sl.tmux("respawn-pane", "-k", "-t", sl.target(name), "-c", str(directory), command)
-        if code != 0:
-            log(f"✗ {name}: tmux respawn-pane failed")
-            return ERROR
+        else:
+            # respawn-pane replaces the idle shell; nothing is typed into the pane.
+            code, _ = sl.tmux("respawn-pane", "-k", "-t", sl.target(name), "-c", str(directory), command)
+            if code != 0:
+                log(f"✗ {name}: tmux respawn-pane failed")
+                return ERROR
     if not wait:
         log(f"→ {name}: launched")
         return OK

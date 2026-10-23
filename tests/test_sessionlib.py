@@ -142,6 +142,9 @@ class SessionlibTests(unittest.TestCase):
         self.assertTrue(self.sl.CLAUDE_RE.search(self.sl.program("/x/claude-code/bin/claude.exe --resume u")))
         self.assertFalse(self.sl.CLAUDE_RE.search(self.sl.program("/x/bin/claude-session GCP")))
         self.assertFalse(self.sl.CLAUDE_RE.search(self.sl.program("/bin/zsh -c claude -p hi")))
+        for shell in ("bash -lc claude -p hi", "/bin/zsh -ic claude --resume x"):
+            self.assertFalse(self.sl.CLAUDE_RE.search(self.sl.program(shell)), shell)
+            self.assertTrue(self.sl.TOOL_SHELL_RE.match(shell), shell)
 
     def test_program_ignores_tool_shells_that_mention_claude(self):
         self.assertEqual(self.sl.program("/bin/zsh -c ps ax | grep claude.exe"), "/bin/zsh")

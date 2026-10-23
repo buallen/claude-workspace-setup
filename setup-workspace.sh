@@ -167,7 +167,11 @@ if profiles.get("Happy Session") != happy_profile:
 if changed:
     if settings != before:
         if original_text is not None:
-            shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
+            old_umask = os.umask(0o077)   # private from the first byte, like the original
+            try:
+                shutil.copy2(real_path, real_path + ".bak-setup")
+            finally:
+                os.umask(old_umask)
         with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
             json.dump(settings, tf, indent=2, ensure_ascii=False)
         if original_text is not None:
@@ -180,6 +184,10 @@ PYTHON
 then
   ok "VS Code configured"
 else
+  rc=$?
+  # 3 = the file is not plain JSON / not an object (left untouched); anything
+  # else is a real failure (permissions, disk) and must stop the installer.
+  [ "$rc" -eq 3 ] || exit "$rc"
   warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
 fi
 
@@ -235,7 +243,11 @@ for group in groups:
 groups[:] = [g for g in groups if g.get("hooks")]
 if settings != before:
     if original_text is not None:
-        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
+        old_umask = os.umask(0o077)   # private from the first byte, like the original
+        try:
+            shutil.copy2(real_path, real_path + ".bak-setup")
+        finally:
+            os.umask(old_umask)
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
@@ -245,6 +257,10 @@ PYTHON
 then
   ok "Task-loop Stop hook not installed"
 else
+  rc=$?
+  # 3 = the file is not plain JSON / not an object (left untouched); anything
+  # else is a real failure (permissions, disk) and must stop the installer.
+  [ "$rc" -eq 3 ] || exit "$rc"
   warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
 fi
 
@@ -303,7 +319,11 @@ for event, arg in wanted.items():
 
 if settings != before:
     if original_text is not None:
-        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
+        old_umask = os.umask(0o077)   # private from the first byte, like the original
+        try:
+            shutil.copy2(real_path, real_path + ".bak-setup")
+        finally:
+            os.umask(old_umask)
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
@@ -314,6 +334,10 @@ PYTHON
 then
   :
 else
+  rc=$?
+  # 3 = the file is not plain JSON / not an object (left untouched); anything
+  # else is a real failure (permissions, disk) and must stop the installer.
+  [ "$rc" -eq 3 ] || exit "$rc"
   warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
 fi
 
@@ -373,7 +397,11 @@ print(ensure("SessionStart", "", f"{hook_dir}/session-marker.py", 5))
 print(ensure("PreToolUse", "Bash", f"{hook_dir}/guard-pkill.py", 5))
 if settings != before:
     if original_text is not None:
-        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
+        old_umask = os.umask(0o077)   # private from the first byte, like the original
+        try:
+            shutil.copy2(real_path, real_path + ".bak-setup")
+        finally:
+            os.umask(old_umask)
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
@@ -384,6 +412,10 @@ PYTHON
 then
   ok "sessionctl linked into ~/.local/bin; session hooks wired"
 else
+  rc=$?
+  # 3 = the file is not plain JSON / not an object (left untouched); anything
+  # else is a real failure (permissions, disk) and must stop the installer.
+  [ "$rc" -eq 3 ] || exit "$rc"
   warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
 fi
 
