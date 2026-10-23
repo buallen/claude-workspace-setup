@@ -152,8 +152,10 @@ LARK_NOTIFY_USER_ID="ou_..."
 - `claude-auth-watchdog.sh` (every 10 min): restarts a session whose agent
   died, and runs the in-session `/login` flow only when the conversation's
   last turn is Claude Code's own `authentication_failed` error.
-- `claude-nightly-upgrade.sh` (04:00): upgrades Claude Code, then
-  `sessionctl restart`s idle sessions running the old version.
+- `claude-nightly-upgrade.sh` (04:00): upgrades Claude Code every night; every
+  14 days it also `sessionctl restart`s idle sessions still running an older
+  version (a new session always starts on the current one, so only long-lived
+  sessions lag). Override with `--force-restart`.
 - `log-janitor.sh` (hourly): log rotation and disk watermarks; daily Otty
   backup, idle-session report and a check that the happy patch is still in place.
 

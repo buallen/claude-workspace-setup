@@ -98,8 +98,9 @@ start time and command still match what was recorded.
 - `claude-auth-watchdog.sh`, every 10 min: restarts stopped sessions with
   `sessionctl start`; runs the in-session `/login` flow only for a real,
   unanswered `authentication_failed` in an idle session.
-- `claude-nightly-upgrade.sh`, 04:00: upgrades Claude Code, `sessionctl restart`s
-  idle sessions still on the old version.
+- `claude-nightly-upgrade.sh`, 04:00: upgrades Claude Code nightly; restarts
+  idle sessions still on the old version only every 14 days (timestamp in
+  `~/.claude/state/nightly-restart-last`, since launchd cannot express it).
 - `log-janitor.sh`, hourly: log/disk housekeeping; daily Otty `state.db`
   backup, idle-session report (no auto-stop), happy patch check.
 - Shared private settings: `~/.config/claude-workspace/local.env`.

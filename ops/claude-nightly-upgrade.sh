@@ -2,24 +2,33 @@
 # claude-nightly-upgrade.sh — 每天 04:00 由 com.kanlu.claude-nightly-upgrade 触发
 #
 # 做两件事：
-#   1) 把 Claude Code 升到 npm 上的 latest
-#   2) 把「跑着旧版且当前空闲」的 tmux session 重启到新版
+#   1) 把 Claude Code 升到 npm 上的 latest —— 每天做，对运行中的 session 零影响
+#   2) 把「跑着旧版且当前空闲」的 tmux session 重启到新版 —— 每 14 天做一次
 #
 # 为什么第 2 步不能省：运行中的 claude 进程用的是启动瞬间加载进内存的镜像，
 # 光升 npm 包，已经在跑的 session 一辈子还是旧版。2026-08-22→09-02 这 11 天
 # 出了 20 个版本，手动逐个重启不现实。
 #
+# 为什么第 2 步不每天做（2026-10-23 起，Kan 指示）：重启是唯一有打扰的动作，
+# 而新开的 session 本来就加载最新版，只有长命 session 会落后 —— 这件事不值得
+# 每晚打扰一次。频率见下面的 RESTART_INTERVAL_DAYS。
+#
 # 04:00 这个点是挑过的：00:25 distiller / 02:30 mall-effect / 02:55 mall-heartbeat
 # 都会拉起 claude 进程，撞上会互相干扰；03:30–08:00 是唯一的空档。
 #
 # 用法：
-#   claude-nightly-upgrade.sh              正常执行
-#   claude-nightly-upgrade.sh --dry-run    只报告会做什么，不 kill 不装包
+#   claude-nightly-upgrade.sh                  正常执行
+#   claude-nightly-upgrade.sh --dry-run        只报告会做什么，不 kill 不装包
+#   claude-nightly-upgrade.sh --force-restart  忽略 14 天频率闸，立刻重启落后的 session
 
 set -uo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+FORCE_RESTART=0
+case "${1:-}" in
+  --dry-run)       DRY_RUN=1 ;;
+  --force-restart) FORCE_RESTART=1 ;;
+esac
 
 NODE_VER="v22.22.0"
 NVM_BIN="$HOME/.nvm/versions/node/$NODE_VER/bin"
@@ -42,6 +51,10 @@ MAX_RUNTIME=2400          # 40 分钟总超时
 KILL_WAIT=20              # 单个进程等待退出的秒数
 SHELL_WAIT=15             # kill 后等 pane 回落到 shell 的秒数（happy 收尾可能慢于 claude.exe）
 BOOT_WAIT=30              # 重启后等待新进程出现的秒数（失败会重发一次，总计 2×）
+
+# 第二步（重启 session）的频率。npm 升级和软链自愈不受它影响，每天照跑。
+RESTART_INTERVAL_DAYS="${CNU_RESTART_INTERVAL_DAYS:-14}"
+RESTART_STAMP="$HOME/.claude/state/nightly-restart-last"
 
 # nvm 必须在 PATH 最前。这不是风格问题：即使写 npm 的全路径，那个 npm 也是被
 # PATH 里第一个 node 执行的，而 /opt/homebrew/bin/node 排在 nvm 前面 —— 2026-09-02
@@ -122,6 +135,29 @@ fi
 
 PKG_MTIME=$(stat -f '%m' "$CC_DIR/package.json" 2>/dev/null || echo 0)
 
+# ── 频率闸：重启这步每 RESTART_INTERVAL_DAYS 天才做一次 ────────────────────
+# 用时间戳文件而不是在 plist 里写固定星期：launchd 的 StartCalendarInterval 表达
+# 不了「隔周」，而且按星期触发时，那天机器没醒就整轮跳过、要再等一周；判「距上次
+# ≥N 天」则会在下一个夜里自动补上。
+RESTART_SKIP_MSG=""
+restart_age_days() {
+  local last
+  last=$(cat "$RESTART_STAMP" 2>/dev/null)
+  case "$last" in ''|*[!0-9]*) echo -1; return ;; esac   # 没有或内容坏了
+  echo $(( ( $(date +%s) - last ) / 86400 ))
+}
+age_days=$(restart_age_days)
+if [ "$FORCE_RESTART" = 1 ]; then
+  log "重启闸：--force-restart，忽略 ${RESTART_INTERVAL_DAYS} 天间隔"
+elif [ "$age_days" -lt 0 ]; then
+  log "重启闸：没有上次记录，本轮执行（之后每 ${RESTART_INTERVAL_DAYS} 天一次）"
+elif [ "$age_days" -lt "$RESTART_INTERVAL_DAYS" ]; then
+  RESTART_SKIP_MSG="⏸ 本轮不重启：距上次 ${age_days} 天，每 ${RESTART_INTERVAL_DAYS} 天一次"
+  log "$RESTART_SKIP_MSG"
+else
+  log "重启闸：距上次 ${age_days} 天 ≥ ${RESTART_INTERVAL_DAYS}，本轮执行"
+fi
+
 # ── 第二步：重启版本落后且空闲的 session ──────────────────────────────────
 # 把所有 claude.exe 归属到 session：对每个 claude pid 向上追祖先，直到命中某个
 # tmux pane_pid。从进程往上追比从 pane 往下找可靠 —— pgrep -f 在沙箱里会漏进程，
@@ -153,7 +189,13 @@ find_claude_pid() {
   awk -F'|' -v s="$1" '$2==s {print $1; exit}' /tmp/cnu-map.txt
 }
 
-build_claude_map
+# 频率闸没放行时，不建映射、给下面的循环喂空列表（比把 100 行循环整段缩进可读）
+list_sessions_to_check() {
+  [ -n "$RESTART_SKIP_MSG" ] && return 0
+  "$TMUX_BIN" list-sessions -F '#{session_name}' 2>/dev/null | sort
+}
+
+[ -z "$RESTART_SKIP_MSG" ] && build_claude_map
 
 RESTARTED=(); SKIPPED_BUSY=(); SKIPPED_AGENT=(); SKIPPED_CURRENT=(); REMOTE=(); FAILED=()
 
@@ -255,12 +297,20 @@ while IFS= read -r sess; do
     75) log "⏭  $sess — 另一个 sessionctl 正在处理（锁），跳过"; SKIPPED_BUSY+=("$sess") ;;
     *)  log "❌ $sess — sessionctl restart 失败（退出码 $rc）"; FAILED+=("$sess(rc=$rc)") ;;
   esac
-done < <("$TMUX_BIN" list-sessions -F '#{session_name}' 2>/dev/null | sort)
+done < <(list_sessions_to_check)
+
+# 时间戳只在真跑过这一轮时写。全员忙碌而被跳过的那种夜晚也算跑过 —— 否则
+# 一个长期忙碌的 session 会把整轮拖成每晚重试，频率闸就形同不存在。
+if [ -z "$RESTART_SKIP_MSG" ] && [ $DRY_RUN = 0 ]; then
+  mkdir -p "$(dirname "$RESTART_STAMP")" && date +%s > "$RESTART_STAMP"
+fi
 
 # ── 汇总 ──────────────────────────────────────────────────────────────────
 join() { local IFS=', '; echo "$*"; }
 SUMMARY="🌙 Claude 夜间升级 $(date '+%m-%d %H:%M')
 $UPGRADE_MSG"
+[ -n "$RESTART_SKIP_MSG" ]        && SUMMARY="$SUMMARY
+$RESTART_SKIP_MSG"
 [ ${#RESTARTED[@]}       -gt 0 ] && SUMMARY="$SUMMARY
 ✅ 已重启(${#RESTARTED[@]}): $(join "${RESTARTED[@]}")"
 [ ${#SKIPPED_CURRENT[@]} -gt 0 ] && SUMMARY="$SUMMARY

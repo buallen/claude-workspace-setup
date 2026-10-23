@@ -13,7 +13,12 @@
 
     <!-- 04:00。00:25 distiller / 02:30 mall-effect-loop / 02:55 mall-heartbeat
          都会拉起 claude 进程，撞上会互相干扰；03:30-08:00 是唯一干净的空档。
-         机器夜间由 caffeinate 保持唤醒，不存在错过触发的问题。 -->
+         机器夜间由 caffeinate 保持唤醒，不存在错过触发的问题。
+
+         每天触发，但脚本里只有「升级 npm 包 + 软链自愈」每天执行；
+         「重启落后的 session」由脚本自己的 14 天时间戳闸控制
+         （~/.claude/state/nightly-restart-last）。隔周这种间隔
+         StartCalendarInterval 表达不了，所以不放在这里。 -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
