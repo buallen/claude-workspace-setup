@@ -47,6 +47,8 @@ mkdir -p "$FAKE/node_modules/happy/dist" "$FAKE/node_modules/happy/scripts" "$FA
 cp "$FIX/happy-wrapper.mjs" "$FAKE/node_modules/happy/dist/index.mjs"
 cp "$FIX/claude_local_launcher.cjs" "$FAKE/node_modules/happy/scripts/claude_local_launcher.cjs"
 cp "$FIX/claude.exe" "$FAKE/claude/claude.exe"
+mkdir -p "$FAKE/node_modules/happy/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64"
+cp "$FIX/claude.exe" "$FAKE/node_modules/happy/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude"
 printf '#!/bin/bash\nexec node "%s" "$@"\n' "$FAKE/node_modules/happy/dist/index.mjs" > "$FAKE/bin/happy"
 chmod +x "$FAKE/bin/happy"
 
@@ -160,6 +162,20 @@ sleep 1
 "${SC[@]}" restart "$NAME" >/dev/null; rc=$?
 check "restart while 'sessionctl lock' holds the session -> 75" '[ $rc -eq 75 ]'
 wait $holder
+
+# 14. remote (phone) mode: happy runs the SDK's "claude" directly, no launcher
+"${SC[@]}" stop "$NAME" --force >/dev/null
+tm set-environment -g FAKE_REMOTE 1
+"${SC[@]}" start "$NAME" >/dev/null; rc=$?
+check "remote mode: start comes up with the SDK claude" '[ $rc -eq 0 ] && [ "$(count "claude-agent-sdk-darwin-arm64/claude")" = 1 ]'
+rpid="$(ps -axo pid=,command= | awk -v t="$T/" 'index($0,t) && /claude-agent-sdk-darwin-arm64\/claude/ && !/awk/ {print $1}')"
+before_marker="$(cat "$SD/.current-session")"
+kill -USR1 "$rpid"; sleep 3
+check "remote mode: /clear moves the marker" '[ "$(cat "$SD/.current-session")" != "$before_marker" ]'
+touch -t 202601010000 "$PROJ/$(cat "$SD/.current-session").jsonl"
+"${SC[@]}" stop "$NAME" >/dev/null; rc=$?
+check "remote mode: stop ends the SDK claude too" '[ $rc -eq 0 ] && [ "$(count "claude-agent-sdk-darwin-arm64/claude|happy/dist/index.mjs")" = 0 ]'
+tm set-environment -gu FAKE_REMOTE
 
 # 11. nothing starts an agent by typing into a pane any more
 leftover="$(grep -rnE 'send-keys.*(happy --yolo|smart-resume|personal_history|claude --dangerously)' "$REPO/bin" "$REPO/ops" "$REPO/lib" "$REPO/hooks" 2>/dev/null)"

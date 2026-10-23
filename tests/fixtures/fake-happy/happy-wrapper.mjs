@@ -18,7 +18,14 @@ const log = join(logs, `2026-01-01-00-00-00-pid-${process.pid}.log`);
 appendFileSync(log, `[00:00:00.000] [SESSION_SCANNER] New session: ${uuid}\n`);
 
 const here = dirname(fileURLToPath(import.meta.url));
-const launcher = join(here, '..', 'scripts', 'claude_local_launcher.cjs');
-spawn(process.execPath, [launcher, '--resume', uuid], { stdio: 'inherit' });
+if (process.env.FAKE_REMOTE) {
+  // Remote (phone) mode: happy drives claude itself through the Agent SDK,
+  // whose native binary is named plain "claude".
+  const sdkClaude = join(here, '..', 'node_modules', '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude');
+  spawn(process.execPath, [sdkClaude, '--resume', uuid], { stdio: 'inherit' });
+} else {
+  const launcher = join(here, '..', 'scripts', 'claude_local_launcher.cjs');
+  spawn(process.execPath, [launcher, '--resume', uuid], { stdio: 'inherit' });
+}
 process.on('SIGTERM', () => process.exit(0));
 setInterval(() => {}, 1000);

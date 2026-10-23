@@ -49,7 +49,7 @@ def private_layout():
     cwd = Path(os.environ.get("SESSION_ROOT", str(home / "claude-sessions"))).expanduser().absolute() / "Personal"
     if cwd.resolve() != cwd:
         raise PersonalHistoryError(f"refusing linked Personal working directory: {cwd}")
-    key = re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
+    key = re.sub(r"[^A-Za-z0-9-]", "-", str(cwd))  # Claude Code also turns "_" into "-"
     project = root / "projects" / key
     for path in (
         root / "projects", root / "history.jsonl", root / "jobs",

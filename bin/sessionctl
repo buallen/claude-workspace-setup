@@ -149,8 +149,8 @@ def fix_tty(procs):
 def stopping_flag(name):
     """Tell smart-resume this exit is deliberate, so it neither retries nor relaunches.
 
-    smart-resume honours the flag only while it is fresh (mtime < 2 min), so a
-    flag left behind by a killed sessionctl cannot disable its retries for good.
+    smart-resume honours the flag only while the pid in it is alive, so a flag
+    left behind by a killed sessionctl cannot disable its retries for good.
     """
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
     flag = LOCK_DIR / f"{name}.stopping"
@@ -195,6 +195,7 @@ def stop(name, force=False):
         "happy": [i for i in map(sl.identity, procs.happy) if i],
         "launcher": [i for i in map(sl.identity, procs.launcher) if i],
         "claude": [i for i in map(sl.identity, procs.claude) if i],
+        "conversations": [uuid] if uuid else [],
     }
     log(f"→ {name}: stopping happy {procs.happy}, launcher {procs.launcher}, claude {procs.claude} (conversation {uuid or '?'})")
     with stopping_flag(name):
@@ -229,7 +230,7 @@ def _stop_processes(name, recorded):
     for lid in recorded["launcher"]:
         table = sl.process_table()
         children = [sl.identity(pid) for pid, (ppid, command) in table.items()
-                    if ppid == lid[0] and sl.CLAUDE_RE.search(sl.program(command) + " ")]
+                    if ppid == lid[0] and sl.CLAUDE_RE.search(sl.program(command))]
         recorded["claude"].extend(i for i in children if i and i not in recorded["claude"])
         rc = terminate(lid, CLAUDE_EXIT_WAIT, "launcher")
         if rc != OK:
@@ -243,9 +244,23 @@ def _stop_processes(name, recorded):
         if rc != OK:
             return rc
 
+    # 3b. A claude the launcher spawned between our scan and its death is now
+    #     reparented to launchd and outside the pane; find it by conversation.
+    for uuid in recorded.get("conversations", []):
+        table = sl.process_table()
+        for pid, (ppid, command) in table.items():
+            if ppid == 1 and uuid in command and sl.CLAUDE_RE.search(sl.program(command)):
+                ident = sl.identity(pid)
+                if ident:
+                    recorded["claude"].append(ident)
+                    rc = terminate(ident, CLAUDE_EXIT_WAIT, "orphaned claude")
+                    if rc != OK:
+                        return rc
+
     # 4. Verify instead of assuming: nothing we recorded is left, and nothing new
     #    took its place in the pane.
-    left = [f"{kind} {i[0]}" for kind, ids in recorded.items() for i in ids if sl.identity(i[0]) == i]
+    left = [f"{kind} {i[0]}" for kind, ids in recorded.items() if kind != "conversations"
+            for i in ids if sl.identity(i[0]) == i]
     procs = sl.session_procs(name)
     if procs and (procs.happy or procs.launcher or procs.claude):
         left.append(f"pane still runs happy {procs.happy} launcher {procs.launcher} claude {procs.claude}")
@@ -276,6 +291,9 @@ def start(name, wait=True):
         procs = sl.session_procs(name)
         if procs and (procs.happy or procs.claude):
             log(f"· {name}: already running")
+            return OK
+        if procs and (procs.smart_resume or procs.launcher):
+            log(f"· {name}: already launching")
             return OK
         info = sl.pane(name)
         if info and info["command"] not in sl.SHELL_COMMANDS:

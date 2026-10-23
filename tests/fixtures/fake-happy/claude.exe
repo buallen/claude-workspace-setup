@@ -45,9 +45,10 @@ process.on('SIGUSR1', () => {
   conversation = crypto.randomUUID();
   fs.writeFileSync(path.join(process.env.FAKE_PROJECT_DIR, conversation + '.jsonl'),
     JSON.stringify({ type: 'user', message: { role: 'user', content: 'after clear' } }) + '\n');
-  const wrapper = execSync(`ps -o ppid= -p ${process.ppid}`).toString().trim();
+  // The wrapper is our parent (remote mode) or grandparent (via the launcher).
+  const grand = execSync(`ps -o ppid= -p ${process.ppid}`).toString().trim();
   for (const f of fs.readdirSync(path.join(process.env.HOME, '.happy', 'logs'))) {
-    if (f.endsWith(`-pid-${wrapper}.log`)) {
+    if (f.endsWith(`-pid-${process.ppid}.log`) || f.endsWith(`-pid-${grand}.log`)) {
       fs.appendFileSync(path.join(process.env.HOME, '.happy', 'logs', f),
         `[00:00:01.000] [SESSION_SCANNER] New session: ${conversation}\n`);
     }

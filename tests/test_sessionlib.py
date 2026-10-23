@@ -135,6 +135,14 @@ class SessionlibTests(unittest.TestCase):
             self.assertTrue(self.sl.WORK_RE.search(text), text)
         self.assertFalse(self.sl.WORK_RE.search("Done. ↓ see the summary below"))
 
+    def test_remote_mode_sdk_binary_counts_as_claude(self):
+        # happy's remote mode runs the Agent SDK's native binary, named plain "claude".
+        sdk = "/x/node_modules/happy/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude --output-format stream-json"
+        self.assertTrue(self.sl.CLAUDE_RE.search(self.sl.program(sdk)))
+        self.assertTrue(self.sl.CLAUDE_RE.search(self.sl.program("/x/claude-code/bin/claude.exe --resume u")))
+        self.assertFalse(self.sl.CLAUDE_RE.search(self.sl.program("/x/bin/claude-session GCP")))
+        self.assertFalse(self.sl.CLAUDE_RE.search(self.sl.program("/bin/zsh -c claude -p hi")))
+
     def test_program_ignores_tool_shells_that_mention_claude(self):
         self.assertEqual(self.sl.program("/bin/zsh -c ps ax | grep claude.exe"), "/bin/zsh")
         self.assertEqual(self.sl.program("/x/bin/node --no-warnings /x/happy/dist/index.mjs --yolo"),

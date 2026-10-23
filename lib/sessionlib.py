@@ -30,7 +30,10 @@ TMUX = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
 UUID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 HAPPY_WRAPPER_RE = re.compile(r"node_modules/happy(?:-coder)?/dist/index\.mjs")
 LAUNCHER_RE = re.compile(r"node_modules/happy(?:-coder)?/scripts/claude_local_launcher\.cjs")
-CLAUDE_RE = re.compile(r"claude\.exe(?:\s|$)|@anthropic-ai/claude-code/cli\.js")
+# Matched against program(): Claude Code's binary (claude.exe), the Agent SDK's
+# native binary that happy uses in remote mode (.../claude-agent-sdk-darwin-arm64/claude),
+# or the older cli.js.
+CLAUDE_RE = re.compile(r"(?:^|/)claude(?:\.exe)?$|@anthropic-ai/claude-code/cli\.js$")
 TOOL_SHELL_RE = re.compile(r"^(?:/bin/)?(?:zsh|bash|sh) -c ")
 RESUME_ARG_RE = re.compile(r"--(?:resume|session-id)[ =]([0-9a-f-]{36})")
 
@@ -209,7 +212,7 @@ def session_procs(name, table=None):
             procs.happy.append(pid)
         elif LAUNCHER_RE.search(prog):
             procs.launcher.append(pid)
-        elif CLAUDE_RE.search(prog + " "):
+        elif CLAUDE_RE.search(prog):
             candidates.append((pid, ppid))
         elif prog.endswith("smart-resume.sh"):
             procs.smart_resume.append(pid)

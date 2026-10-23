@@ -46,7 +46,7 @@ elif name == "tmux":
         subprocess.run(["/bin/bash", "-c", command], env=env, cwd=cwd, check=True)
 elif name in ("happy", "claude"):
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude")))
-    key = re.sub(r"[^A-Za-z0-9_-]", "-", os.getcwd())
+    key = re.sub(r"[^A-Za-z0-9-]", "-", os.getcwd())
     target = root / "projects" / key
     target.mkdir(parents=True, exist_ok=True)
     with (target / "simulated-write.jsonl").open("a") as f:
@@ -68,7 +68,7 @@ class PersonalHistoryTests(unittest.TestCase):
         self.normal = self.home / ".claude"
         self.cwd = self.home / "claude-sessions/Personal"
         self.cwd.mkdir(parents=True)
-        self.key = re.sub(r"[^A-Za-z0-9_-]", "-", str(self.cwd))
+        self.key = re.sub(r"[^A-Za-z0-9-]", "-", str(self.cwd))
         self.project = self.private / "projects" / self.key
         self.project.mkdir(parents=True)
         self.normal_project = self.normal / "projects" / self.key
@@ -312,7 +312,7 @@ class PersonalHistoryTests(unittest.TestCase):
         name = "Team Pay"
         cwd = self.home / "claude-sessions" / name
         cwd.mkdir(parents=True)
-        key = re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
+        key = re.sub(r"[^A-Za-z0-9-]", "-", str(cwd))
         self.history(A, message("2026-09-01T09:00:00+08:00"), project=self.normal / "projects" / key)
         (cwd / ".current-session").write_text(A + "\n")
         env = {**self.env, "CLAUDE_CONFIG_DIR": str(self.normal), "CLAUDE_LAUNCHER": "claude"}

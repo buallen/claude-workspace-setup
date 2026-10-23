@@ -36,7 +36,7 @@ class SetupSettingsTests(unittest.TestCase):
         text = '{\n  // my note\n  "permissions": {"allow": ["Bash(ls)"]},\n}\n'
         path.write_text(text)
         for result in run_all(path):
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 3, result.stderr)   # shell prints a warning, not "ok"
             self.assertIn("not plain JSON", result.stderr)
         self.assertEqual(path.read_text(), text)
         self.assertFalse((self.dir / "settings.json.bak-setup").exists())
@@ -58,6 +58,22 @@ class SetupSettingsTests(unittest.TestCase):
         run_all(path)
         self.assertEqual(path.stat().st_mtime_ns, before)      # unchanged content -> not rewritten
         self.assertEqual(json.loads(path.read_text()), first)
+
+    def test_non_object_json_is_skipped_not_crashed(self):
+        path = self.dir / "settings.json"
+        path.write_text("[]")
+        for result in run_all(path):
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(path.read_text(), "[]")
+
+    def test_backup_keeps_the_private_file_mode(self):
+        path = self.dir / "settings.json"
+        path.write_text(json.dumps({"env": {"TOKEN": "x"}}))
+        os.chmod(path, 0o600)
+        run_all(path)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(str(path) + ".bak-setup").st_mode & 0o777, 0o600)
 
     def test_symlinked_settings_stay_a_symlink(self):
         real = self.dir / "real.json"

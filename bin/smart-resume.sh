@@ -145,9 +145,11 @@ while true; do
 
   # `sessionctl stop` drops this flag while it stops the session; without it a
   # stop within 10 s of a start looks like a failed launch and gets retried.
+  # The flag holds the stopping sessionctl's pid; honour it only while that
+  # process lives, so a flag left by a killed sessionctl cannot disable retries.
   stop_flag="$HOME/.claude/session-locks/${SESSION_NAME}.stopping"
-  if [ -e "$stop_flag" ] && [ $(( $(date +%s) - $(stat -f %m "$stop_flag" 2>/dev/null || echo 0) )) -lt 120 ]; then
-    break   # fresh flag only: a stale one (sessionctl killed mid-stop) must not disable retries
+  if [ -e "$stop_flag" ] && kill -0 "$(cut -d' ' -f1 "$stop_flag" 2>/dev/null)" 2>/dev/null; then
+    break
   fi
 
   # If happy ran for more than 10s, assume the user exited deliberately → stop.

@@ -11,6 +11,7 @@ NC='\033[0m'
 
 ok()   { echo -e "${GREEN}[OK]${NC} $1"; }
 info() { echo -e "${YELLOW}[..] $1${NC}"; }
+warn() { echo -e "${YELLOW}[!!] $1${NC}" >&2; }
 err()  { echo -e "${RED}[!!] $1${NC}"; }
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -110,7 +111,7 @@ info "Configuring VS Code settings..."
 VSCODE_SETTINGS="$HOME/Library/Application Support/Code/User/settings.json"
 mkdir -p "$(dirname "$VSCODE_SETTINGS")"
 
-python3 - "$VSCODE_SETTINGS" "$INSTALL_DIR/bin/claude-session" << 'PYTHON'
+if python3 - "$VSCODE_SETTINGS" "$INSTALL_DIR/bin/claude-session" << 'PYTHON'
 import json, sys, os, shutil, tempfile
 
 settings_path = sys.argv[1]
@@ -127,7 +128,10 @@ except json.JSONDecodeError as exc:
     # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
     # file we could not read with {}: skip this step and say so.
     print(f"  ⚠ {settings_path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(3)
+if not isinstance(settings, dict):
+    print(f"  ⚠ {settings_path} is not a JSON object; skipped, nothing written", file=sys.stderr)
+    sys.exit(3)
 before = json.loads(original_text) if original_text else {}
 
 changed = False
@@ -163,8 +167,7 @@ if profiles.get("Happy Session") != happy_profile:
 if changed:
     if settings != before:
         if original_text is not None:
-            with open(real_path + ".bak-setup", "w") as f:
-                f.write(original_text)
+            shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
         with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
             json.dump(settings, tf, indent=2, ensure_ascii=False)
         if original_text is not None:
@@ -174,7 +177,11 @@ if changed:
 else:
     print("  VS Code settings already configured")
 PYTHON
-ok "VS Code configured"
+then
+  ok "VS Code configured"
+else
+  warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
+fi
 
 # ── Step 6: Install VS Code extensions ───────────────────────────────────────
 info "Installing VS Code 'Restore Terminals' extension..."
@@ -203,7 +210,7 @@ fi
 info "Removing the retired task-loop Stop hook (if present)..."
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 [ -f "$CLAUDE_SETTINGS" ] || echo '{}' > "$CLAUDE_SETTINGS"
-python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
+if python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
 import json, sys, os, shutil, tempfile
 path = sys.argv[1]
 real_path = os.path.realpath(path)   # a symlinked settings file stays a symlink
@@ -217,7 +224,10 @@ except json.JSONDecodeError as exc:
     # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
     # file we could not read with {}: skip this step and say so.
     print(f"  ⚠ {path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(3)
+if not isinstance(settings, dict):
+    print(f"  ⚠ {path} is not a JSON object; skipped, nothing written", file=sys.stderr)
+    sys.exit(3)
 before = json.loads(original_text) if original_text else {}
 groups = settings.get("hooks", {}).get("Stop", [])
 for group in groups:
@@ -225,15 +235,18 @@ for group in groups:
 groups[:] = [g for g in groups if g.get("hooks")]
 if settings != before:
     if original_text is not None:
-        with open(real_path + ".bak-setup", "w") as f:
-            f.write(original_text)
+        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
         shutil.copymode(real_path, tf.name)
     os.replace(tf.name, real_path)
 PYTHON
-ok "Task-loop Stop hook not installed"
+then
+  ok "Task-loop Stop hook not installed"
+else
+  warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
+fi
 
 # ── Step 8: Install tab-status emoji/backend marker poller ──────────────────
 info "Installing tab-status poller..."
@@ -241,7 +254,7 @@ mkdir -p ~/.claude/hooks
 cp "$REPO_DIR/tab-status/tab-status-poller.py" "$REPO_DIR/tab-status/tab-status.sh" ~/.claude/hooks/
 chmod +x ~/.claude/hooks/tab-status-poller.py ~/.claude/hooks/tab-status.sh
 
-python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
+if python3 - "$CLAUDE_SETTINGS" << 'PYTHON'
 import json, sys, os, shutil, tempfile
 
 settings_path = sys.argv[1]
@@ -258,7 +271,10 @@ except json.JSONDecodeError as exc:
     # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
     # file we could not read with {}: skip this step and say so.
     print(f"  ⚠ {settings_path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(3)
+if not isinstance(settings, dict):
+    print(f"  ⚠ {settings_path} is not a JSON object; skipped, nothing written", file=sys.stderr)
+    sys.exit(3)
 before = json.loads(original_text) if original_text else {}
 
 hooks = settings.setdefault("hooks", {})
@@ -287,8 +303,7 @@ for event, arg in wanted.items():
 
 if settings != before:
     if original_text is not None:
-        with open(real_path + ".bak-setup", "w") as f:
-            f.write(original_text)
+        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
@@ -296,6 +311,11 @@ if settings != before:
     os.replace(tf.name, real_path)
 print("  tab-status hooks wired (UserPromptSubmit/Stop/Notification/SessionStart)")
 PYTHON
+then
+  :
+else
+  warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
+fi
 
 PLIST="$HOME/Library/LaunchAgents/com.kanlu.tabstatus-poller.plist"
 cp "$REPO_DIR/tab-status/com.kanlu.tabstatus-poller.plist" "$PLIST"
@@ -309,7 +329,7 @@ echo "  （Otty: privilege-title-shell=true 默认开；VS Code: Step 5 已设 t
 info "Installing sessionctl and session hooks..."
 mkdir -p ~/.local/bin
 ln -sf "$INSTALL_DIR/bin/sessionctl" ~/.local/bin/sessionctl
-python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks" << 'PYTHON'
+if python3 - "$CLAUDE_SETTINGS" "$INSTALL_DIR/hooks" << 'PYTHON'
 import json, sys, os, shutil, tempfile
 path, hook_dir = sys.argv[1], sys.argv[2]
 real_path = os.path.realpath(path)   # a symlinked settings file stays a symlink
@@ -323,7 +343,10 @@ except json.JSONDecodeError as exc:
     # JSONC (comments, trailing commas) is common, e.g. VS Code. Never replace a
     # file we could not read with {}: skip this step and say so.
     print(f"  ⚠ {path} is not plain JSON ({exc}); skipped, nothing written", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(3)
+if not isinstance(settings, dict):
+    print(f"  ⚠ {path} is not a JSON object; skipped, nothing written", file=sys.stderr)
+    sys.exit(3)
 before = json.loads(original_text) if original_text else {}
 hooks = settings.setdefault("hooks", {})
 
@@ -350,8 +373,7 @@ print(ensure("SessionStart", "", f"{hook_dir}/session-marker.py", 5))
 print(ensure("PreToolUse", "Bash", f"{hook_dir}/guard-pkill.py", 5))
 if settings != before:
     if original_text is not None:
-        with open(real_path + ".bak-setup", "w") as f:
-            f.write(original_text)
+        shutil.copy2(real_path, real_path + ".bak-setup")   # keeps the 0600 mode
     with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(real_path), delete=False, suffix=".tmp") as tf:
         json.dump(settings, tf, indent=2, ensure_ascii=False)
     if original_text is not None:
@@ -359,7 +381,11 @@ if settings != before:
     os.replace(tf.name, real_path)
 
 PYTHON
-ok "sessionctl linked into ~/.local/bin; session hooks wired"
+then
+  ok "sessionctl linked into ~/.local/bin; session hooks wired"
+else
+  warn "settings file left unchanged (not plain JSON or not an object): fix it and re-run setup"
+fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""

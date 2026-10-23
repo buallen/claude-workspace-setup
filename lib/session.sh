@@ -15,7 +15,7 @@ session_dir() {
 }
 
 session_project_key() {
-  session_dir "$1" | sed 's#[^A-Za-z0-9_-]#-#g'
+  session_dir "$1" | sed 's#[^A-Za-z0-9-]#-#g'
 }
 
 ensure_session_dir() {
