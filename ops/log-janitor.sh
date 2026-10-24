@@ -306,6 +306,15 @@ if [ "$(state_get last_happy_patch_check)" != "$TODAY" ]; then
 不补的话每个会话每 3 秒整文件重读对话记录，常年多吃几百 MB 和 20–50% CPU。"
       log "happy scanner patch missing in $dist"
     fi
+    # 模型列表补丁（ops/patch-happy-claude-model-list.py，上游 PR slopus/happy#1844）。
+    # 判据同上：只在「还是原版那个 metadata 字面量、且没有补丁标记」时告警，
+    # 上游合并发版后代码会变，不会误报。没它手机选择器就看不到新模型。
+    if grep -q 'flavor: "claude",' "$dist" && ! grep -q '__happyClaudeModels' "$dist"; then
+      notify "⚠️ happy 的 Claude 模型列表补丁不在了（$(basename "$dist")，多半是升级过 happy）。
+跑 python3 ~/bin/patch-happy-claude-model-list.py，再逐个 sessionctl restart。
+不补的话手机 App 的模型选择器会退回它自己编译进去的旧列表。"
+      log "happy claude-model-list patch missing in $dist"
+    fi
   done
 fi
 

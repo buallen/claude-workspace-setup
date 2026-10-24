@@ -136,6 +136,14 @@ python3 ops/patch-happy-scanner-incremental.py   # or ops/patch-happy.sh (all pa
 sessionctl restart "<name>"                      # per session, to load it
 ```
 
+`ops/patch-happy-claude-model-list.py` is the same deal for the phone's model
+picker. That list is compiled into the Happy app, so a new Claude model does
+not appear until the app itself ships — but the app prefers a list the session
+reports in its metadata, and the CLI never reports one for Claude. The patch
+makes it report one (upstream PR
+[#1844](https://github.com/slopus/happy/pull/1844)). `ops/log-janitor.sh`
+checks both patches daily, since an upgrade silently removes them.
+
 Note: on happy 1.2.5 every `happy` invocation, even `--version`, registers a
 session with the server.
 
