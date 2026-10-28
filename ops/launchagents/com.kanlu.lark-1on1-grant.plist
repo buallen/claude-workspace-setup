@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kanlu.lark-1on1-grant</string>
+
+    <!-- /usr/bin/python3 而不是 homebrew 的：脚本只用标准库，系统 python 不会
+         因为 brew upgrade 换版本而失效。 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/kan.lu/bin/lark-grant-1on1-recording.py</string>
+    </array>
+
+    <!-- 每 15 分钟。脚本默认回看 12 小时且按 meeting_id 幂等，所以机器睡过去几轮
+         不会漏，醒来第一轮就补上。妙记生成有延迟，等不到就留给下一轮。 -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- false：load 的那一刻不触发，避免安装时就对外发起写请求。 -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/lark-1on1-grant-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/lark-1on1-grant-launchd.log</string>
+
+    <!-- PATH 里必须有 /opt/homebrew/bin，脚本调的是那里的 lark-cli。 -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/kan.lu</string>
+        <key>TZ</key>
+        <string>Asia/Singapore</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -318,6 +318,21 @@ if [ "$(state_get last_happy_patch_check)" != "$TODAY" ]; then
   done
 fi
 
+# ── 每日一次：1:1 录制自动授权的失败巡检 ──────────────────────
+# com.kanlu.lark-1on1-grant 每 15 分钟跑一次，坏掉时**毫无症状** —— 它自己的
+# Lark 通知走的也是 lark-cli 的 user token，授权过期时连通知都发不出去。
+# 所以这里反过来查它的日志：今天出现过 ✗ 就报一次。
+LARK_1ON1_LOG="$HOME/Library/Logs/lark-grant-1on1.log"
+if [ -f "$LARK_1ON1_LOG" ] && [ "$(state_get last_1on1_grant_check)" != "$TODAY" ]; then
+  state_set last_1on1_grant_check "$TODAY"
+  fails=$(grep "^$TODAY" "$LARK_1ON1_LOG" 2>/dev/null | grep -c '✗')
+  if [ "${fails:-0}" -gt 0 ]; then
+    notify "⚠️ 1:1 录制自动授权今天失败 ${fails} 次。
+看 $LARK_1ON1_LOG；多半是 lark-cli 的 user 授权过期了，跑 lark-cli auth status --verify 确认。"
+    log "lark-1on1-grant failed ${fails} times today"
+  fi
+fi
+
 # ── 每日一次：backups 保留期清理 ──────────────────────────────
 # 本脚本每小时跑，用状态文件保证 prune 一天只跑一次。
 if [ "$(state_get last_backup_prune)" != "$TODAY" ]; then
