@@ -22,9 +22,14 @@
     LARK_1ON1_PEER_OPEN_ID="ou_..."   # 1:1 对方
     LARK_NOTIFY_USER_ID="ou_..."      # 失败时 Lark 通知给谁（可选）
 
+授权时默认**通知对方**（飞书会给他一条「某某把妙记分享给你」的提示），这样他不用
+盯着看什么时候能访问。`need_notification` 只在 user 身份下有效，正好这里就是。
+不想打扰时加 --quiet。
+
 用法：
-    lark-grant-1on1-recording.py              正常执行
+    lark-grant-1on1-recording.py              正常执行（会通知对方）
     lark-grant-1on1-recording.py --dry-run    只报告会授权给谁，不真的调用
+    lark-grant-1on1-recording.py --quiet      授权但不通知对方
     lark-grant-1on1-recording.py --hours 48   回看窗口（默认 12 小时）
 """
 import argparse
@@ -119,8 +124,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--hours", type=int, default=12,
                     help="回看多久内结束的会议（妙记生成有延迟，窗口要比间隔大）")
-    ap.add_argument("--notify-peer", action="store_true",
-                    help="授权时通知对方（默认静默，避免每周一条打扰）")
+    ap.add_argument("--quiet", action="store_true",
+                    help="授权时不通知对方（默认通知，让对方知道录制可看了）")
     args = ap.parse_args()
 
     load_env()
@@ -196,7 +201,7 @@ def main():
         ok, res = cli("drive", "permission.members", "create",
                       "--params", json.dumps({
                           "token": token, "type": "minutes",
-                          "need_notification": bool(args.notify_peer)}),
+                          "need_notification": not args.quiet}),
                       "--yes",
                       data={"member_type": "openid", "member_id": peer,
                             "perm": "full_access", "type": "user"})
