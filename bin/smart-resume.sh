@@ -23,6 +23,16 @@
 #   The proxy-selection branches and the ~/claude-sessions/<name>/.backend marker
 #   were dead code after that (cliproxyapi.conf no longer exists, so the proxy
 #   branch could never be entered) and have been deleted.
+#
+#   2026-10-30  ONE narrow exception came back: a session whose directory holds
+#               `.backend` = `gpt` runs Claude Code on GPT through the local
+#               CLIProxyAPI (127.0.0.1:8317) → team gateway codex-lb. It is opt-in
+#               per session and changes nothing for any other session, which is
+#               what the 08-17 outage taught: back then EVERY session went through
+#               the proxy, so one expired proxy credential took down 15 sessions.
+#               A gpt session is GPT from its first message and stays GPT — the
+#               proxy only serves gpt-* and rejects claude-*, so the session cannot
+#               drift across models and hit the thinking-block 400 above.
 
 SESSION_NAME="$1"
 if [ "$SESSION_NAME" = "Personal" ]; then
@@ -125,11 +135,51 @@ while true; do
     UUID=$(fork_session "$UUID")
   fi
 
-  # The pane's fallback shell may have INHERITED ANTHROPIC_* from an older
-  # proxied launch, so actively unset them (env -u) rather than merely not
-  # setting them. No --model pin: /model inside the session decides.
-  LAUNCH_ENV=(-u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_DEFAULT_HAIKU_MODEL -u CLAUDE_CODE_SUBAGENT_MODEL)
-  echo "[smart-resume] direct Anthropic, no model pin"
+  if [ "$(cat "$SESSION_DIR/.backend" 2>/dev/null)" = "gpt" ]; then
+    # GPT session (see the 2026-10-30 note at the top). Refuse to start rather
+    # than fall back to Anthropic: a silent fallback looks like a working GPT
+    # session while it actually runs and bills Claude.
+    if ! nc -z -G 3 127.0.0.1 8317 2>/dev/null; then
+      echo "[smart-resume] GPT session but the local proxy (127.0.0.1:8317) is down; not starting." >&2
+      echo "[smart-resume] start it: launchctl kickstart -k gui/$(id -u)/com.kanlu.cliproxyapi" >&2
+      exit 1
+    fi
+    GPT_LOCAL_KEY=$(security find-generic-password -s claude-CLIPROXY_LOCAL_KEY -w 2>/dev/null)
+    if [ -z "$GPT_LOCAL_KEY" ]; then
+      echo "[smart-resume] GPT session but Keychain has no claude-CLIPROXY_LOCAL_KEY; not starting." >&2
+      exit 1
+    fi
+    GPT_MODEL="${GPT_MODEL:-gpt-6.1-sol}"
+    # ANTHROPIC_MODEL picks the model without passing --model through happy.
+    # The DEFAULT_*_MODEL aliases cover Claude Code's own background calls and
+    # subagents that ask for haiku/sonnet/opus — the proxy rejects claude-* names.
+    # The Fable slot ("hardest, longest-running") maps to gpt-6-astra, which the
+    # team gateway reserves for design and hard debugging (WH, 2026-09-22).
+    #
+    # CLAUDE_CODE_EFFORT_LEVEL=high: settings.json sets effortLevel=xhigh for the
+    # Claude sessions, and the GPT session inherited it (seen 2026-10-30). The team
+    # gateway caps effort at high and has called out xhigh by name as what drains
+    # the shared pool, so pin it here instead of trusting the proxy to clamp.
+    LAUNCH_ENV=(-u ANTHROPIC_API_KEY -u CLAUDE_CODE_SUBAGENT_MODEL
+                ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+                ANTHROPIC_AUTH_TOKEN="$GPT_LOCAL_KEY"
+                ANTHROPIC_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_HAIKU_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_SONNET_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_OPUS_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-6-astra
+                CLAUDE_CODE_EFFORT_LEVEL=high)
+    echo "[smart-resume] GPT session: $GPT_MODEL via local proxy → team gateway"
+  else
+    # The pane's fallback shell may have INHERITED ANTHROPIC_* from an older
+    # proxied launch, so actively unset them (env -u) rather than merely not
+    # setting them. No --model pin: /model inside the session decides.
+    LAUNCH_ENV=(-u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_DEFAULT_HAIKU_MODEL
+                -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL
+                -u ANTHROPIC_DEFAULT_FABLE_MODEL -u ANTHROPIC_MODEL
+                -u CLAUDE_CODE_EFFORT_LEVEL -u CLAUDE_CODE_SUBAGENT_MODEL)
+    echo "[smart-resume] direct Anthropic, no model pin"
+  fi
 
   START=$(date +%s)
 
