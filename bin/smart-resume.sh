@@ -149,26 +149,51 @@ while true; do
       echo "[smart-resume] GPT session but Keychain has no claude-CLIPROXY_LOCAL_KEY; not starting." >&2
       exit 1
     fi
-    GPT_MODEL="${GPT_MODEL:-gpt-6.1-sol}"
+    # gpt-6-sol is the default rather than gpt-6.1-sol (2026-11-02, Kan's call on
+    # the day's numbers): the gateway reported server_is_overloaded 57 times for
+    # gpt-6.1-sol that day against 10 for gpt-6-sol and 0 for gpt-6-astra, and it
+    # was getting worse by the hour (7 at 11:00 → 22 at 17:00). Each one cools the
+    # model down for a ~5min retry-after, which outlasts Claude Code's nine
+    # retries, so the session just stalls. 6.1-sol stays one keystroke away on the
+    # Opus slot for when the pool is quiet.
+    GPT_MODEL="${GPT_MODEL:-gpt-6-sol}"
     # ANTHROPIC_MODEL picks the model without passing --model through happy.
     # The DEFAULT_*_MODEL aliases cover Claude Code's own background calls and
     # subagents that ask for haiku/sonnet/opus — the proxy rejects claude-* names.
-    # The Fable slot ("hardest, longest-running") maps to gpt-6-astra, which the
-    # team gateway reserves for design and hard debugging (WH, 2026-09-22).
+    #
+    # One distinct gateway model per slot, so /model is a usable escape hatch when
+    # one of them is cooled down (with every slot pointing at the same model there
+    # was nothing to switch to):
+    #   Opus   → gpt-6.1-sol, the strongest; escalate here when it is not congested
+    #   Sonnet → $GPT_MODEL (gpt-6-sol), the default and the main workhorse
+    #   Haiku  → gpt-6-sol, so titles/summaries don't burn main-model capacity
+    #   Fable  → gpt-6-astra, which the team reserves for design and hard
+    #            debugging (WH, 2026-09-22)
     #
     # CLAUDE_CODE_EFFORT_LEVEL=high: settings.json sets effortLevel=xhigh for the
     # Claude sessions, and the GPT session inherited it (seen 2026-10-30). The team
     # gateway caps effort at high and has called out xhigh by name as what drains
     # the shared pool, so pin it here instead of trusting the proxy to clamp.
+    #
+    # CLAUDE_CODE_NO_MODEL_FALLBACK=1 (2026-11-02, after it bit Kan): settings.json
+    # carries fallbackModel=["claude-sonnet-5"], which is right for Claude sessions
+    # and fatal here. When the gateway reported gpt-6.1-sol busy, Claude Code
+    # announced "Switched to Sonnet 5 due to high demand" and the next request died
+    # on "400 unknown provider for model claude-sonnet-5" — the proxy serves gpt-*
+    # only. The session was stuck until restarted. Disabling the fallback turns that
+    # into a plain overload error you can retry, or switch model with /model + `s`.
+    # Passing --settings instead does not work: happy uses --settings itself for its
+    # hook file and warns that a user-supplied one is overridden.
     LAUNCH_ENV=(-u ANTHROPIC_API_KEY -u CLAUDE_CODE_SUBAGENT_MODEL
                 ANTHROPIC_BASE_URL=http://127.0.0.1:8317
                 ANTHROPIC_AUTH_TOKEN="$GPT_LOCAL_KEY"
                 ANTHROPIC_MODEL="$GPT_MODEL"
-                ANTHROPIC_DEFAULT_HAIKU_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-6-sol
                 ANTHROPIC_DEFAULT_SONNET_MODEL="$GPT_MODEL"
-                ANTHROPIC_DEFAULT_OPUS_MODEL="$GPT_MODEL"
+                ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-6.1-sol
                 ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-6-astra
-                CLAUDE_CODE_EFFORT_LEVEL=high)
+                CLAUDE_CODE_EFFORT_LEVEL=high
+                CLAUDE_CODE_NO_MODEL_FALLBACK=1)
     echo "[smart-resume] GPT session: $GPT_MODEL via local proxy → team gateway"
   else
     # The pane's fallback shell may have INHERITED ANTHROPIC_* from an older
@@ -177,7 +202,8 @@ while true; do
     LAUNCH_ENV=(-u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_DEFAULT_HAIKU_MODEL
                 -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL
                 -u ANTHROPIC_DEFAULT_FABLE_MODEL -u ANTHROPIC_MODEL
-                -u CLAUDE_CODE_EFFORT_LEVEL -u CLAUDE_CODE_SUBAGENT_MODEL)
+                -u CLAUDE_CODE_EFFORT_LEVEL -u CLAUDE_CODE_NO_MODEL_FALLBACK
+                -u CLAUDE_CODE_SUBAGENT_MODEL)
     echo "[smart-resume] direct Anthropic, no model pin"
   fi
 
