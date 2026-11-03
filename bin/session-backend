@@ -57,7 +57,11 @@ BACKUP_DIR = sl.HOME / "claude-sessions" / ".transcript-backups"
 LOG_FILE = sl.HOME / "Library" / "Logs" / "session-backend.log"
 THINKING_TYPES = {"thinking", "redacted_thinking"}
 PLACEHOLDER = [{"type": "text", "text": "[thinking omitted]"}]
-SETTLE_SECONDS = 3       # let the calling turn finish rendering before we kill it
+# Long enough for the calling turn to finish and reach the phone. This usually
+# runs as a slash command, so after the tool returns the model still has to
+# write its reply and happy still has to push it to the server; kill the session
+# before that and the app shows half a turn.
+SETTLE_SECONDS = 8
 
 
 def log(message, to_file=True):
