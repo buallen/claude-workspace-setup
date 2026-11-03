@@ -232,7 +232,7 @@ def main(argv=None):
         return worker(name, args.target, strip=not args.no_strip)
 
     if not args.target:
-        log(f"{name}: {now}", to_file=False)
+        log(f"{name}: backend = {now}", to_file=False)
         return OK
     if args.target == now:
         log(f"· {name} is already on {now}; nothing to do", to_file=False)

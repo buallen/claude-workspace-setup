@@ -134,7 +134,11 @@ A session whose directory holds a `.backend` file containing `gpt` runs Claude
 Code against GPT models on a team gateway, reached through a local CLIProxyAPI
 on `127.0.0.1:8317`. Tools, skills, hooks, MCP and the phone app are unchanged;
 only the model is. Switch a session with `session-backend`, or with the
-`/backend` slash command from inside it, which works from the phone too.
+`/backend` slash command from inside it, which works from the phone too. The
+command runs the script with the `` !`…` `` syntax, at prompt assembly rather
+than as a tool call, so it still switches when the session's own model is the
+thing that is broken; to rescue a session that is already down, run it from a
+healthy one with `--session <name>`.
 
 Every other session keeps talking to Anthropic directly. That split is the
 lesson of 2026-08-17: when all sessions went through a proxy, one expired
