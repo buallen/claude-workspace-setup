@@ -67,6 +67,10 @@ sessionctl restart NAME [--force]   # clean stop + start on the same conversatio
 sessionctl stop NAME [--force]      # stop the agent, keep the tab at a shell
 sessionctl start NAME               # start it again (no-op if running)
 sessionctl idle --hours 24          # sessions idle or waiting for 24 h+
+
+session-backend                     # which backend the session in cwd runs on
+session-backend gpt|claude          # switch it, then restart it
+session-backend gpt --dry-run       # print the plan, change nothing
 ```
 
 `sessionctl` refuses to stop a busy session (tool command running, transcript
@@ -124,6 +128,36 @@ anything that scans `~/.claude/projects`). `claude-session` refuses to start
 it without that config dir; `lib/personal_history.py` selects its conversation
 by the latest real message, never by file mtime.
 
+## GPT sessions
+
+A session whose directory holds a `.backend` file containing `gpt` runs Claude
+Code against GPT models on a team gateway, reached through a local CLIProxyAPI
+on `127.0.0.1:8317`. Tools, skills, hooks, MCP and the phone app are unchanged;
+only the model is. Switch a session with `session-backend`, or with the
+`/backend` slash command from inside it, which works from the phone too.
+
+Every other session keeps talking to Anthropic directly. That split is the
+lesson of 2026-08-17: when all sessions went through a proxy, one expired
+credential took down fifteen of them. The GPT branch refuses to start while the
+proxy is down rather than falling back to Anthropic, which would look like a
+working GPT session while billing Claude.
+
+Two reasons the switch is a tool and not `echo gpt > .backend`:
+
+- **Thinking blocks do not cross models.** `thinking` and `redacted_thinking`
+  carry a signature only their issuing model can verify, so resuming a
+  Claude-written conversation on GPT fails with a non-retryable 400 and leaves
+  the session stuck. `session-backend` strips them between stop and start,
+  keeping a backup in `~/claude-sessions/.transcript-backups/`. `/clear` is not
+  a substitute: with no real turn in the cleared conversation the resume target
+  falls back to the newest transcript that has one, which is the old one.
+- **One gateway model per slot.** `/model` is the way out when a model is
+  cooled down — the gateway returns `server_is_overloaded` with a retry-after
+  that outlasts Claude Code's retries — so opus, sonnet, haiku and fable each
+  map to a different model instead of all to the default. Choose with `s`, not
+  Enter: Enter writes a slot alias into the global `settings.json`, and every
+  other session picks it up on its next start.
+
 ## Happy
 
 The CLI is the npm package `happy` (formerly `happy-coder`). Until
@@ -141,8 +175,17 @@ picker. That list is compiled into the Happy app, so a new Claude model does
 not appear until the app itself ships — but the app prefers a list the session
 reports in its metadata, and the CLI never reports one for Claude. The patch
 makes it report one (upstream PR
-[#1844](https://github.com/slopus/happy/pull/1844)). `ops/log-janitor.sh`
-checks both patches daily, since an upgrade silently removes them.
+[#1844](https://github.com/slopus/happy/pull/1844)), reporting the gateway's
+models instead in a GPT session.
+
+The same patch also drops a `claude-*` model override in a GPT session. The app
+attaches `meta.model` to every message, not only when you change it, so a Claude
+model left selected on the phone is pushed into the SDK each turn and the proxy,
+which serves `gpt-*` only, answers `400 unknown provider`. The terminal sends no
+`meta.model`, so the session works there and fails on the phone.
+
+`ops/log-janitor.sh` checks both patches daily, since an upgrade silently
+removes them.
 
 Note: on happy 1.2.5 every `happy` invocation, even `--version`, registers a
 session with the server.
@@ -170,7 +213,8 @@ LARK_NOTIFY_USER_ID="ou_..."
 ## Repository layout
 
 ```text
-bin/          sessionctl, claude-session, smart-resume.sh, otty-setup, otty-workspace, ...
+bin/          sessionctl, session-backend, claude-session, smart-resume.sh,
+              otty-setup, otty-workspace, ...
 lib/          sessionlib.py (paths, processes, state, conversation), session.sh,
               personal_history.py, vscode_restore.py
 hooks/        session-marker.py, guard-pkill.py, other Claude Code hooks
