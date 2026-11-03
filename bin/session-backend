@@ -39,6 +39,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import socket
 import subprocess
@@ -168,6 +169,108 @@ def strip_thinking(path):
     return removed, emptied, backup
 
 
+def process_cwd(pid):
+    out = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.startswith("n"):
+            return os.path.realpath(line[1:])
+    return None
+
+
+def daemon_strays(name):
+    """Agents the Happy daemon started for this session while it was stopped.
+
+    Seen 2026-11-03, one second after the stop: the app noticed the session go
+    offline and the daemon resumed it headless, outside tmux, with
+
+        claude --happy-starting-mode remote --started-by daemon
+               --resume <uuid> --model claude-opus-5 --permission-mode plan
+
+    That path never runs smart-resume, so it ignores .backend and uses whatever
+    model the phone had stored -- a Claude model against a conversation this
+    tool just converted for GPT. The session then shows up twice in the app.
+
+    `sessionctl stop` cannot catch these: it looks for orphans adopted by
+    launchd (ppid 1) during the stop, and this one appears after it finished.
+
+    All of these are required, so nothing outside this session is ever touched:
+    `--started-by daemon` as two adjacent argv tokens, an argv token that is
+    happy's entry point or claude itself, cwd equal to this session's
+    directory, not a descendant of the session's pane, and not this process or
+    one of its own ancestors.
+
+    Substring matching on the whole command line is not enough and was the
+    first version of this: a shell running a script that merely mentions
+    "--started-by daemon" and "happy" from the session directory matched, and
+    the first test killed the shell that was running it.
+    """
+    info = sl.pane(name)
+    if not info:
+        return []
+    table = sl.process_table()
+    in_pane = set(sl.descendants(table, info["pid"]))
+    directory = os.path.realpath(sl.session_dir(name))
+
+    # Never signal ourselves or anything we are running under.
+    protected, walk = {os.getpid()}, os.getpid()
+    while walk in table and walk > 1:
+        walk = table[walk][0]
+        protected.add(walk)
+
+    strays = []
+    for pid, (_, command) in table.items():
+        if pid in in_pane or pid in protected:
+            continue
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        if not any(a == "--started-by" and b == "daemon"
+                   for a, b in zip(argv, argv[1:])):
+            continue
+        if not any(a.endswith("happy/dist/index.mjs") or sl.CLAUDE_RE.search(a)
+                   for a in argv):
+            continue
+        if process_cwd(pid) != directory:
+            continue
+        ident = sl.identity(pid)
+        if ident:
+            strays.append(ident)
+    return strays
+
+
+def kill_daemon_strays(name):
+    for ident in daemon_strays(name):
+        pid = ident[0]
+        log(f"[{name}] worker: daemon-started stray outside the pane, stopping it: "
+            f"{pid} {ident[2][:90]}")
+        if not signal_same(ident, "TERM"):
+            continue
+        for _ in range(8):
+            time.sleep(1)
+            if not pid_alive(pid):
+                break
+        if pid_alive(pid):
+            signal_same(ident, "KILL")
+
+
+def pid_alive(pid):
+    return sl.alive(pid)
+
+
+def signal_same(ident, name):
+    """Signal only while the pid still names the process we recorded."""
+    import signal as signal_module
+    if sl.identity(ident[0]) != ident:
+        return False
+    try:
+        os.kill(ident[0], getattr(signal_module, f"SIG{name}"))
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def run_sessionctl(*args):
     result = subprocess.run([sys.executable, str(SESSIONCTL), *args],
                             capture_output=True, text=True)
@@ -199,6 +302,9 @@ def worker(name, target, strip):
             log(f"[{name}] worker: no conversation to strip")
 
     code = run_sessionctl("start", name)
+    # After start, not before: the daemon resumes a session it sees go offline,
+    # so a stray can appear at any point in the stop/start window.
+    kill_daemon_strays(name)
     log(f"[{name}] worker: done (rc={code})")
     return OK if code == 0 else ERROR
 
