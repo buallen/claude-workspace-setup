@@ -292,19 +292,19 @@ ${idle_list}
   fi
 fi
 
-# ── 每日一次：happy 增量扫描补丁巡检 ──────────────────────────
-# 补丁（ops/patch-happy-scanner-incremental.py，上游 PR slopus/happy#1915）会被
-# `npm i -g happy` 覆盖。只在「还是原版整文件读取、且没有补丁标记」时告警，
-# 这样上游修好发版后（代码已变）不会误报。
+# ── 每日一次：happy 补丁巡检 ──────────────────────────────────
+# 增量扫描补丁（patch-happy-scanner-incremental.py）已于 2026-11-04 回滚，这里
+# **反过来**告警：它要是又出现了，说明有人重新打了它。回滚原因见 patch-happy.sh
+# 第 4 步的注释 —— 它会让每次会话重启把整份对话历史重新上传一遍。
 if [ "$(state_get last_happy_patch_check)" != "$TODAY" ]; then
   state_set last_happy_patch_check "$TODAY"
   for dist in "$HOME"/.nvm/versions/node/*/lib/node_modules/happy/dist/index-*.mjs; do
     [ -f "$dist" ] || continue
-    if grep -q 'file = await readFile(expectedSessionFile, "utf-8")' "$dist" && ! grep -q '__scanCursors' "$dist"; then
-      notify "⚠️ happy 的增量扫描补丁不在了（$(basename "$dist")，多半是升级过 happy）。
-跑 python3 ~/bin/patch-happy-scanner-incremental.py，再逐个 sessionctl restart。
-不补的话每个会话每 3 秒整文件重读对话记录，常年多吃几百 MB 和 20–50% CPU。"
-      log "happy scanner patch missing in $dist"
+    if grep -q '__scanCursors' "$dist"; then
+      notify "⚠️ happy 的增量扫描补丁又被打上了（$(basename "$dist")）。它已于 11-04 回滚：
+每次会话重启会把整份对话历史重新推一遍到一个新的 App 会话行（实测 5345 条 / 5 秒）。
+先 cp \"$dist.bak-scanner\" \"$dist\"，再跑 patch-happy-claude-model-list.py 补回模型列表。"
+      log "happy scanner patch reappeared in $dist"
     fi
     # 模型列表补丁（ops/patch-happy-claude-model-list.py，上游 PR slopus/happy#1844）。
     # 判据同上：只在「还是原版那个 metadata 字面量、且没有补丁标记」时告警，
