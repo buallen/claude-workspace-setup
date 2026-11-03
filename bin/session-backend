@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+"""session-backend - switch one workspace session between Claude and GPT.
+
+  session-backend                     show the session's current backend
+  session-backend gpt                 switch to GPT (local proxy -> team gateway)
+  session-backend claude              switch back to Anthropic direct
+  session-backend gpt --no-strip      refuse instead of stripping thinking blocks
+  session-backend <t> --session NAME  act on another session, not the one in cwd
+  session-backend <t> --dry-run       say what would happen, change nothing
+
+Exit codes: 0 ok (or already there), 1 error, 2 usage / preconditions not met.
+
+Why this exists (2026-11-03): the switch itself is one line -- write `gpt` into
+~/claude-sessions/<name>/.backend and restart, smart-resume reads it at launch.
+Everything else here is the part that is easy to get wrong:
+
+  1. A restart RESUMES the session's conversation, and `thinking` /
+     `redacted_thinking` blocks carry a signature only their issuing model can
+     verify. Resuming a Claude-written conversation on GPT (or the reverse)
+     fails with a 400 that is NOT retryable, and the session is stuck until
+     someone edits the transcript by hand. So: strip those blocks (backed up)
+     between stop and start, when the conversation actually carries any.
+
+  2. `/clear` is NOT a substitute. sessionlib.resume_target() falls back to the
+     newest transcript with a real turn when the marked one has none, so a
+     just-cleared session resumes the OLD, polluted conversation. And the very
+     turn that runs this command would put fresh Claude thinking blocks into
+     the new conversation anyway.
+
+  3. The restart has to outlive the caller: this usually runs as a slash
+     command inside the session it is about to kill. The worker is re-exec'd
+     with start_new_session=True so `tmux respawn-pane -k` cannot take it down.
+
+  4. Going to GPT with the local proxy down would leave the session unable to
+     start at all (smart-resume refuses rather than silently billing Claude),
+     so check the port before writing anything.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+BIN_DIR = Path(os.path.realpath(__file__)).parent
+sys.path.insert(0, str(BIN_DIR.parent / "lib"))
+import sessionlib as sl  # noqa: E402
+
+OK, ERROR, USAGE = 0, 1, 2
+
+PROXY_HOST, PROXY_PORT = "127.0.0.1", 8317
+SESSIONCTL = BIN_DIR / "sessionctl"
+BACKUP_DIR = sl.HOME / "claude-sessions" / ".transcript-backups"
+LOG_FILE = sl.HOME / "Library" / "Logs" / "session-backend.log"
+THINKING_TYPES = {"thinking", "redacted_thinking"}
+PLACEHOLDER = [{"type": "text", "text": "[thinking omitted]"}]
+SETTLE_SECONDS = 3       # let the calling turn finish rendering before we kill it
+
+
+def log(message, to_file=True):
+    print(message, flush=True)
+    if not to_file:
+        return
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a") as stream:
+            stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def backend_file(name):
+    return sl.session_dir(name) / ".backend"
+
+
+def current_backend(name):
+    """Anything other than the literal 'gpt' means the direct-Anthropic branch."""
+    try:
+        return "gpt" if backend_file(name).read_text().strip() == "gpt" else "claude"
+    except (OSError, ValueError):
+        return "claude"
+
+
+def proxy_up():
+    try:
+        with socket.create_connection((PROXY_HOST, PROXY_PORT), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
+def iter_transcript(path):
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            yield line
+
+
+def count_thinking(path):
+    """How many thinking blocks the transcript carries. -1 if it cannot be read."""
+    if not path or not path.exists():
+        return 0
+    total = 0
+    try:
+        for line in iter_transcript(path):
+            # Cheap pre-filter: the vast majority of lines have no thinking at all.
+            if '"thinking"' not in line and '"redacted_thinking"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            content = (record.get("message") or {}).get("content")
+            if isinstance(content, list):
+                total += sum(1 for b in content
+                             if isinstance(b, dict) and b.get("type") in THINKING_TYPES)
+    except OSError:
+        return -1
+    return total
+
+
+def strip_thinking(path):
+    """Remove every thinking block, keeping a backup outside ~/.claude/projects.
+
+    Lines that do not parse are written back byte for byte: a transcript we
+    only half understand is still the user's conversation.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backup = BACKUP_DIR / f"{path.stem}.{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    shutil.copy2(path, backup)
+
+    tmp = path.with_name(path.name + f".strip.{os.getpid()}")
+    removed = emptied = 0
+    with path.open(encoding="utf-8") as src, tmp.open("w", encoding="utf-8") as dst:
+        for line in src:
+            if '"thinking"' not in line and '"redacted_thinking"' not in line:
+                dst.write(line)
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                dst.write(line)
+                continue
+            message = record.get("message")
+            content = (message or {}).get("content")
+            if not isinstance(content, list):
+                dst.write(line)
+                continue
+            kept = [b for b in content
+                    if not (isinstance(b, dict) and b.get("type") in THINKING_TYPES)]
+            if len(kept) == len(content):
+                dst.write(line)
+                continue
+            removed += len(content) - len(kept)
+            if not kept:
+                # An empty content array makes the API reject the whole message.
+                kept = [dict(block) for block in PLACEHOLDER]
+                emptied += 1
+            message["content"] = kept
+            dst.write(json.dumps(record, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+    return removed, emptied, backup
+
+
+def run_sessionctl(*args):
+    result = subprocess.run([sys.executable, str(SESSIONCTL), *args],
+                            capture_output=True, text=True)
+    for stream in (result.stdout, result.stderr):
+        for line in (stream or "").splitlines():
+            log(f"    {line}")
+    return result.returncode
+
+
+def worker(name, target, strip):
+    """Detached: stop, de-poison the conversation, start. Never runs in the pane."""
+    log(f"[{name}] worker: switching to {target}")
+    time.sleep(SETTLE_SECONDS)
+
+    code = run_sessionctl("stop", name, "--force")
+    if code != 0:
+        log(f"[{name}] worker: stop failed (rc={code}); .backend is already {target}, "
+            f"run `sessionctl start {name}` once the session is free")
+        return ERROR
+
+    if strip:
+        uuid = sl.resume_target(name)
+        path = sl.conversation_file(name, uuid) if uuid else None
+        if path and path.exists():
+            removed, emptied, backup = strip_thinking(path)
+            log(f"[{name}] worker: stripped {removed} thinking blocks "
+                f"({emptied} turns left with a placeholder) from {uuid[:8]}; backup {backup}")
+        else:
+            log(f"[{name}] worker: no conversation to strip")
+
+    code = run_sessionctl("start", name)
+    log(f"[{name}] worker: done (rc={code})")
+    return OK if code == 0 else ERROR
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="session-backend",
+                                     description=__doc__.split("\n\n")[0])
+    parser.add_argument("target", nargs="?", choices=["gpt", "claude"],
+                        help="omit to just show the current backend")
+    parser.add_argument("--session", help="session name (default: the one in cwd)")
+    parser.add_argument("--no-strip", action="store_true",
+                        help="refuse the switch instead of stripping thinking blocks")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+
+    name = args.session or sl.name_from_cwd(os.getcwd())
+    if not name:
+        log(f"✗ not inside a session directory ({os.getcwd()}); pass --session NAME", to_file=False)
+        return USAGE
+    if not sl.session_dir(name).is_dir():
+        log(f"✗ {name}: {sl.session_dir(name)} does not exist", to_file=False)
+        return USAGE
+    if name in sl.PRIVATE_SESSIONS:
+        log(f"✗ {name} has its own config root and never reaches the backend branch; "
+            f"nothing to switch", to_file=False)
+        return USAGE
+
+    now = current_backend(name)
+    if args.worker:
+        return worker(name, args.target, strip=not args.no_strip)
+
+    if not args.target:
+        log(f"{name}: {now}", to_file=False)
+        return OK
+    if args.target == now:
+        log(f"· {name} is already on {now}; nothing to do", to_file=False)
+        return OK
+
+    if args.target == "gpt" and not proxy_up():
+        log(f"✗ the local proxy ({PROXY_HOST}:{PROXY_PORT}) is down, so a GPT session "
+            f"could not start at all.\n"
+            f"  launchctl kickstart -k gui/{os.getuid()}/com.kanlu.cliproxyapi", to_file=False)
+        return USAGE
+
+    uuid = sl.resume_target(name)
+    blocks = count_thinking(sl.conversation_file(name, uuid)) if uuid else 0
+    if blocks < 0:
+        log(f"✗ {name}: cannot read the conversation that would be resumed ({uuid}); "
+            f"not switching blind", to_file=False)
+        return ERROR
+    if blocks and args.no_strip:
+        log(f"✗ {name}: conversation {uuid[:8]} carries {blocks} thinking blocks, which "
+            f"{args.target} cannot verify -> non-retryable 400 on resume.\n"
+            f"  drop --no-strip to have them stripped (a backup goes to {BACKUP_DIR}).",
+            to_file=False)
+        return USAGE
+
+    plan = [f"write 'gpt' to {backend_file(name)}" if args.target == "gpt"
+            else f"remove {backend_file(name)}",
+            f"stop {name} (--force)",
+            (f"strip {blocks} thinking blocks from {uuid[:8]} (backup kept)"
+             if blocks else "no thinking blocks to strip"),
+            f"start {name}, resuming {uuid[:8] if uuid else 'a new conversation'}"]
+    if args.dry_run:
+        log(f"{name}: {now} -> {args.target} (dry run)", to_file=False)
+        for step in plan:
+            log(f"  - {step}", to_file=False)
+        return OK
+
+    if args.target == "gpt":
+        backend_file(name).write_text("gpt\n")
+    else:
+        backend_file(name).unlink(missing_ok=True)
+
+    worker_argv = [sys.executable, str(Path(os.path.realpath(__file__))), args.target,
+                   "--session", name, "--worker"]
+    if args.no_strip:
+        worker_argv.append("--no-strip")
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handle = LOG_FILE.open("a")
+    # start_new_session: this normally runs inside the very session being
+    # restarted, and `tmux respawn-pane -k` kills the pane's process group.
+    subprocess.Popen(worker_argv, stdin=subprocess.DEVNULL, stdout=handle,
+                     stderr=subprocess.STDOUT, start_new_session=True, close_fds=True)
+    handle.close()
+
+    log(f"✓ {name}: {now} -> {args.target}. Restarting in {SETTLE_SECONDS}s:", to_file=False)
+    for step in plan[1:]:
+        log(f"  - {step}", to_file=False)
+    log(f"  progress: {LOG_FILE}", to_file=False)
+    return OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
