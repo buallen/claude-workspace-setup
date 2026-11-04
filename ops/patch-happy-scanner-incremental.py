@@ -104,12 +104,17 @@ NEW_HEAD = '''async function readSessionEntries(projectDir, sessionId, cursors) 
 # 这个上限不去修那个竞态，而是从源头封顶：**不管预标记失不失效、注册几次，一次
 # 冷读最多产出这么多条**。增量读（有有效游标）不受影响，所以正常对话一条不少。
 #
-# 单位是 transcript 的行，不是 App 里的消息条数 —— 实测 14111 行约对应 5345 条
-# 消息（约 0.38），所以 300 行大致是 100 条出头，正好是 Kan 要的量级。
-# 想调就设环境变量 HAPPY_SCAN_COLD_LIMIT。
+# 单位是 transcript 的**行**，不是 App 里的消息条数。实测约三分之一的行会变成
+# 消息：300 行在 GPT 会话出 102 条、在 TroubleShooting 出 111 条。Kan 2026-11-04
+# 试过 111 条后说「20 条就够了」，所以默认落在 60 行（≈20 条）。
+# 想调就设环境变量 HAPPY_SCAN_COLD_LIMIT，不用重打补丁。
+#
+# 窗口这么小，起点多半落在某一轮对话中间，App 里最上面可能是半截工具调用（有
+# tool-call-end 没有 start 之类）。只影响观感，往下就是完整的；真要上下文完整
+# 就调大。
 COLD_LIMIT_LINE = (
     "const __scanColdLimit = Math.max(1, "
-    "Number(process.env.HAPPY_SCAN_COLD_LIMIT || 300) || 300);\n"
+    "Number(process.env.HAPPY_SCAN_COLD_LIMIT || 60) || 60);\n"
 )
 
 # (旧文本, 新文本)：调用点与游标 Map
