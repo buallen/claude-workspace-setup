@@ -26,7 +26,8 @@ RUNAWAY_MB=500          # 超过这个就是失控，除截断外还要告警
 DISK_WARN_PCT=85        # 磁盘使用率告警线（只告警，不动手）
 DISK_CRIT_PCT=90        # 超过这个自动跑 disk-cleanup-safe.sh 的安全段
 MEM_FREE_WARN_PCT=15    # 空闲内存低于这个百分比时告警并列出静置 session
-ROLLING_KEEP_DAYS=14    # 按 PID/时间戳滚动的一次性日志保留天数
+ROLLING_KEEP_DAYS=7     # 按 PID/时间戳滚动的一次性日志保留天数。
+                        # 2026-11-04 从 14 收到 7：14 天时 ~/.happy/logs 常年 1.5G
 KEEP_SNAPSHOTS=7        # 全量快照类目录保留最近几份
 APP_LOG_KEEP_DAYS=3     # 第三方 App 滚动日志保留天数
 
@@ -231,24 +232,56 @@ json.dump(d, open(p, 'w'), indent=2)
 TODAY=$(date '+%Y-%m-%d')
 
 # ── 磁盘临界线：自动清理 ──────────────────────────────────────
-# 只跑 disk-cleanup-safe.sh 里「清掉还能自动再生」的三段：
+# 只跑 disk-cleanup-safe.sh 里「清掉还能自动再生」的段：
 #   2 = gcloud 日志、3 = 开发工具缓存、6 = Docker build cache
+#   7 = playwright-mcp 陈旧 profile、8 = 会话产物备份（>14 天）
 # 段 1（Chrome 克隆）不在这里，见下面的每日块。
 # 故意不跑：4(nvm 版本) 5(一次性冗余)——都是跑一次就没了的，不该反复执行。
 # 一天只跑一次：缓存清完会被构建重新填满，每小时清等于每小时重下依赖，
 # 而且每次都发 Lark——2026-10-12~13 两天发了 19 条「90% → 90%」。
+#
+# 效果必须核账（2026-11-04 加）。在此之前只记 before/after 就发「已自动清理」，
+# 于是 10-30~11-04 连着六天 96%→96%、98%→98%、99%→98% 全都当成功报掉，
+# 没人发现段 3 的 pnpm 每晚 EROFS 失败。现在：回收量和失败段都写进通知，
+# 清完仍 ≥95% 记一次无效，连续 3 次就改口说「已失效」而不是「已清理」。
 if [ "${disk_pct:-0}" -ge "$DISK_CRIT_PCT" ] && [ "$(state_get last_auto_cleanup)" != "$TODAY" ]; then
   state_set last_auto_cleanup "$TODAY"
-  for seg in 2 3 6; do
-    bash "$HOME/bin/disk-cleanup-safe.sh" --apply "$seg" >> "$LOG_FILE" 2>&1
+  before_kb=$(df -k /System/Volumes/Data | tail -1 | awk '{print $4}')
+  failed_segs=""
+  for seg in 2 3 6 7 8; do
+    if ! bash "$HOME/bin/disk-cleanup-safe.sh" --apply "$seg" >> "$LOG_FILE" 2>&1; then
+      failed_segs="$failed_segs $seg"
+    fi
   done
+  after_kb=$(df -k /System/Volumes/Data | tail -1 | awk '{print $4}')
   after_pct=$(df /System/Volumes/Data | tail -1 | awk '{gsub("%","",$5); print $5}')
   after_avail=$(df -h /System/Volumes/Data | tail -1 | awk '{print $4}')
-  notify "🧹 磁盘达 ${disk_pct}%，已自动清理
-gcloud 日志 / 开发工具缓存 / Docker build cache
-现在：${after_pct}%，可用 ${after_avail}
-（nvm、一次性冗余需手动跑 disk-cleanup-safe.sh）"
-  log "auto-cleanup at ${disk_pct}% -> ${after_pct}%"
+  freed_gb=$(( (after_kb - before_kb) / 1024 / 1024 ))
+
+  if [ "${after_pct:-100}" -ge 95 ]; then
+    streak=$(( $(state_get ineffective_streak 2>/dev/null | grep -E '^[0-9]+$' || echo 0) + 1 ))
+  else
+    streak=0
+  fi
+  state_set ineffective_streak "$streak"
+
+  fail_line=""
+  [ -n "$failed_segs" ] && fail_line="
+⚠️ 失败的段:${failed_segs}（日志 $LOG_FILE 搜 '✗ 失败'）"
+
+  if [ "$streak" -ge 3 ]; then
+    notify "🚨 自动清理已连续 ${streak} 天无效
+本次只回收 ${freed_gb}G，仍 ${after_pct}%（可用 ${after_avail}）。
+能自动清的已经清完了，剩下的是数据不是缓存。
+看大头：du -sh ~/Library/Containers/* ~/Documents ~/Desktop ~/Downloads | sort -rh | head
+预演全部段：bash ~/bin/disk-cleanup-safe.sh${fail_line}"
+  else
+    notify "🧹 磁盘达 ${disk_pct}%，已自动清理
+gcloud 日志 / 开发工具缓存 / Docker build cache / playwright profile / 会话产物
+回收 ${freed_gb}G，现在 ${after_pct}%，可用 ${after_avail}
+（nvm、一次性冗余需手动跑 disk-cleanup-safe.sh）${fail_line}"
+  fi
+  log "auto-cleanup at ${disk_pct}% -> ${after_pct}% (freed ${freed_gb}G, streak=${streak}, failed:${failed_segs:-none})"
 fi
 
 # ── 每日一次：Chrome code_sign_clone ──────────────────────────
