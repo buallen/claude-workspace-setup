@@ -4,6 +4,7 @@
   sessionctl status [NAME] [--json]     state, conversation and processes
   sessionctl start NAME [--no-wait]     start the agent in the session's pane (no-op if running)
   sessionctl stop NAME [--force]        stop happy + claude cleanly, leave the pane at a shell
+  sessionctl stop NAME --close          ... and kill the tmux session too
   sessionctl restart NAME [--force]     stop + start under one lock
   sessionctl idle [--hours N] [--json]  sessions idle (or waiting for input) for N+ hours
   sessionctl quiet [--days N] [--all]   sessions nobody has typed into for N+ days
@@ -169,7 +170,34 @@ def stopping_flag(name):
         flag.unlink(missing_ok=True)
 
 
-def stop(name, force=False):
+def close_session(name):
+    """Kill the tmux session itself, for when you are done with the session.
+
+    Plain stop() deliberately leaves the pane at a shell, because that is what
+    restart() needs: start() respawns into the existing pane and the attached
+    Otty tab keeps its client. --close is the other intent - nothing of the
+    session stays behind. The cost is that the tab loses its tmux client and
+    falls back to a login shell, and the next `start` has to create the session
+    again, detached (reattach from the tab, or just open a new one).
+
+    happy needs nothing extra here. Its SIGTERM handler already reports the
+    session death to the server, which sets active=false; what it cannot do is
+    archive it, because lifecycleState lives in end-to-end encrypted metadata
+    that only a key holder writes. A stopped session therefore shows up in the
+    app as inactive-but-resumable no matter what we do locally. Archiving is an
+    app-side action (or DELETE /v1/sessions/:id, which is irreversible).
+    """
+    if name not in sl.list_sessions():
+        return OK
+    code, _ = sl.tmux("kill-session", "-t", f"={name}")
+    if code != 0:
+        log(f"✗ {name}: tmux kill-session failed")
+        return ERROR
+    log(f"  {name}: tmux session killed (the Otty tab is now a plain shell)")
+    return OK
+
+
+def stop(name, force=False, close=False):
     procs = sl.session_procs(name)
     if procs is None:
         log(f"✗ {name}: no such tmux session")
@@ -185,7 +213,7 @@ def stop(name, force=False):
                 wait_for_shell(name)
         fix_tty(sl.session_procs(name))
         log(f"· {name}: already stopped")
-        return OK
+        return close_session(name) if close else OK
     state = sl.session_state(name, procs)
     if state["state"] in ("busy", "background") and not force:
         log(f"✗ {name}: {state['state']} ({'; '.join(state['reasons'])}), not stopping without --force")
@@ -213,6 +241,8 @@ def stop(name, force=False):
         rc = _stop_processes(name, recorded)
     if rc == OK:
         log(f"✓ {name}: stopped")
+        if close:
+            rc = close_session(name)
     return rc
 
 
@@ -483,6 +513,9 @@ def main(argv=None):
             p.add_argument("--force", action="store_true")
         else:
             p.add_argument("--no-wait", action="store_true", help="return as soon as the pane is launched")
+        if cmd == "stop":
+            p.add_argument("--close", action="store_true",
+                           help="also kill the tmux session, not just the agent")
     args = parser.parse_args(argv)
 
     if args.cmd == "status":
@@ -499,7 +532,7 @@ def main(argv=None):
     if args.cmd == "start":
         return with_lock(args.name, lambda: start(args.name, wait=not args.no_wait))
     if args.cmd == "stop":
-        return with_lock(args.name, lambda: stop(args.name, args.force))
+        return with_lock(args.name, lambda: stop(args.name, args.force, args.close))
     return with_lock(args.name, lambda: stop(args.name, args.force) or start(args.name))
 
 
