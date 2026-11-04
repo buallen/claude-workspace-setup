@@ -6,7 +6,15 @@
   sessionctl stop NAME [--force]        stop happy + claude cleanly, leave the pane at a shell
   sessionctl restart NAME [--force]     stop + start under one lock
   sessionctl idle [--hours N] [--json]  sessions idle (or waiting for input) for N+ hours
+  sessionctl quiet [--days N] [--all]   sessions nobody has typed into for N+ days
   sessionctl lock NAME -- CMD...        run CMD holding NAME's lock (75 if taken)
+
+`idle` and `quiet` answer different questions. `idle` reads idle_since, so a
+cron-driven session that writes every hour is never idle, and a session whose
+happy wrapper is still ticking looks fresh. `quiet` reads the transcripts for
+the last turn a human typed: on 2026-11-05 Features was `idle 0.2h` but had
+had no human input for five days. Use `quiet` to decide what to stop, `idle`
+to decide what is waiting on you right now.
 
 Exit codes: 0 ok, 1 error, 2 usage / no such session, 3 busy (use --force),
 4 process identity changed under us, 5 a process would not stop, 75 locked.
@@ -378,6 +386,78 @@ def cmd_idle(args):
     return OK
 
 
+def quiet_rows():
+    live = set(sl.list_sessions())
+    table = sl.process_table()
+    rows = []
+    for name, project, archived in sl.transcript_dirs():
+        files = []
+        for path in project.glob("*.jsonl"):
+            try:
+                files.append((path.stat().st_mtime, path))
+            except OSError:
+                continue   # purged while we were looking
+        if not files:
+            continue       # a project directory with no transcript is an empty shell
+        last, text = None, None
+        for mtime, path in sorted(files, reverse=True):
+            # A typed turn cannot be newer than the file holding it, so once the
+            # next file is older than our best hit the rest cannot beat it. Keeps
+            # a session with 85 transcripts (AgentOrg) to one or two reads.
+            if last is not None and mtime <= last:
+                break
+            stamp, line = sl.last_human_input(path)
+            if stamp is not None and (last is None or stamp > last):
+                last, text = stamp, line
+        procs = None if archived else sl.session_procs(name, table)
+        if archived:
+            where = "archived"
+        elif procs and procs.claude:
+            where = "running"
+        elif name in live:
+            where = "stopped"   # the tmux pane is still there, the agent is not
+        else:
+            where = "no pane"
+        rows.append({
+            "name": name,
+            "last_human_input": last,
+            "quiet_days": round((time.time() - last) / 86400, 1) if last else None,
+            "last_write": max(mtime for mtime, _ in files),
+            "last_line": (text or "")[:60],
+            "where": where,
+            "transcripts": len(files),
+        })
+    return rows
+
+
+def cmd_quiet(args):
+    rows = quiet_rows()
+    if not args.all:
+        # No human input at all means cron drives it; report those only when the
+        # transcript has also stopped moving, otherwise it is a working robot.
+        rows = [r for r in rows
+                if (r["quiet_days"] or 0) >= args.days
+                and (r["last_human_input"] or (time.time() - r["last_write"]) >= args.days * 86400)]
+    rows.sort(key=lambda r: r["last_human_input"] or r["last_write"])
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+        return OK
+    if not rows:
+        print(f"no session has been quiet for {args.days}+ days")
+        return OK
+    print(f"{'SESSION':22}{'LAST HUMAN INPUT':20}{'QUIET':>7}  {'WHERE':9} LAST LINE")
+    for r in rows:
+        if r["last_human_input"]:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["last_human_input"]))
+            quiet = f"{r['quiet_days']}d"
+        else:
+            when = "never (cron-driven)"
+            quiet = f"{round((time.time() - r['last_write']) / 86400, 1)}d*"
+        print(f"{r['name'][:21]:22}{when:20}{quiet:>7}  {r['where']:9} {r['last_line']}")
+    print("\n* no human input on record; the age shown is since the last write.")
+    return OK
+
+
 def with_lock(name, fn):
     try:
         with session_lock(name):
@@ -392,6 +472,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("status"); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("idle"); p.add_argument("--hours", type=float, default=24); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("quiet", help="sessions nobody has typed into for N+ days")
+    p.add_argument("--days", type=float, default=3); p.add_argument("--all", action="store_true")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("lock", help="run a command while holding the session's lock")
     p.add_argument("name"); p.add_argument("command", nargs=argparse.REMAINDER)
     for cmd in ("start", "stop", "restart"):
@@ -406,6 +489,8 @@ def main(argv=None):
         return cmd_status(args)
     if args.cmd == "idle":
         return cmd_idle(args)
+    if args.cmd == "quiet":
+        return cmd_quiet(args)
     if args.cmd == "lock":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:

@@ -12,6 +12,7 @@ Process layout of a running session (happy launcher):
     node .../scripts/claude_local_launcher.cjs -> claude.exe -> tool shells
 """
 from dataclasses import dataclass, field
+import datetime
 import json
 import os
 from pathlib import Path
@@ -71,6 +72,31 @@ def project_dir(name):
 
 def marker_path(name):
     return session_dir(name) / ".current-session"
+
+
+def transcript_dirs():
+    """[(name, project directory, archived)] for every session with transcripts.
+
+    list_sessions() only knows about live tmux sessions, so it cannot answer
+    "which sessions have gone quiet" - a stopped session has no tmux entry but
+    its transcripts are still the record of what was left unfinished. We walk
+    the session directories for the names, then sweep the project roots for
+    transcripts whose session directory is gone (archived) so nothing is lost.
+    """
+    found = {}
+    if SESSION_ROOT.is_dir():
+        for path in sorted(SESSION_ROOT.iterdir()):
+            if not path.is_dir() or path.name.startswith(("_", ".")) or path.name.endswith(".git"):
+                continue
+            project = project_dir(path.name)
+            if project.is_dir():
+                found[project] = (path.name, False)
+    for root in (HOME / ".claude", HOME / ".claude-private"):
+        key = project_key(SESSION_ROOT) + "-"
+        for project in sorted((root / "projects").glob(f"{key}*")):
+            if project.is_dir() and project not in found:
+                found[project] = (project.name[len(key):], True)
+    return [(name, project, archived) for project, (name, archived) in found.items()]
 
 
 def name_from_cwd(cwd):
@@ -316,6 +342,79 @@ def has_effective_message(path, chunk=1 << 20):
     except OSError:
         return False
     return False
+
+
+def is_human_input(obj):
+    """True for a turn the person actually typed.
+
+    is_effective_message() already drops hook injections (isMeta), subagent
+    turns (isSidechain), compact summaries and the slash-command envelopes
+    listed in personal_history.WRAPPERS. On top of that we want only the user
+    side, and not the tool_result turns the harness writes as role "user".
+    """
+    if not isinstance(obj, dict) or obj.get("type") != "user":
+        return False
+    if not is_effective_message(obj):
+        return False
+    content = (obj.get("message") or {}).get("content")
+    if isinstance(content, list):
+        return not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+    return True
+
+
+def last_human_input(path, chunk=1 << 20):
+    """(epoch, first line of the text) of the newest typed turn, or (None, None).
+
+    Scans backwards like has_effective_message(): a 50 MB transcript whose last
+    input is near the end costs one chunk, not a full read. Needed because a
+    session can look busy while nobody has typed into it for days - cron-driven
+    sessions write constantly, and `idle_since` only tracks activity.
+    """
+    try:
+        with path.open("rb") as stream:
+            end = stream.seek(0, os.SEEK_END)
+            carry = b""
+            while end > 0:
+                start = max(0, end - chunk)
+                stream.seek(start)
+                data = stream.read(end - start) + carry
+                lines = data.split(b"\n")
+                carry = lines.pop(0) if start > 0 else b""   # may be cut mid-line
+                for line in reversed(lines):
+                    if not line.strip():
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except (ValueError, UnicodeError):
+                        continue
+                    if not is_human_input(obj):
+                        continue
+                    stamp = _epoch(obj.get("timestamp"))
+                    if stamp is None:
+                        continue
+                    return stamp, _first_line(obj)
+                end = start
+    except OSError:
+        return None, None
+    return None, None
+
+
+def _epoch(stamp):
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+def _first_line(obj):
+    content = (obj.get("message") or {}).get("content")
+    if isinstance(content, str):
+        text = content
+    else:
+        text = " ".join(
+            b.get("text", "") for b in content or []
+            if isinstance(b, dict) and b.get("type") == "text")
+    return " ".join(text.split())
 
 
 def valid_conversation(name, uuid):
